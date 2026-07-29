@@ -1,0 +1,30 @@
+services:
+  unsubscribe:
+    build:
+      context: ..
+      dockerfile: deploy/unsubscribe.Dockerfile
+    restart: unless-stopped
+    environment:
+      UNSUBSCRIBE_SIGNING_SECRET: ${UNSUBSCRIBE_SIGNING_SECRET:?required}
+      UNSUBSCRIBE_SYNC_SECRET: ${UNSUBSCRIBE_SYNC_SECRET:?required}
+      UNSUBSCRIBE_DB: /data/events.sqlite3
+    volumes:
+      - unsubscribe-data:/data
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?required}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [unsubscribe]
+volumes:
+  unsubscribe-data:
+  caddy-data:
+  caddy-config:
+

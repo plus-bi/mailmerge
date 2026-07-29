@@ -1,0 +1,29 @@
+# Copy this file to a private location, then set:
+# MAILMERGE_PROFILE_CONFIG=/absolute/path/to/profiles.toml
+#
+# Do not put passwords or OAuth tokens in this file. password_env names an
+# environment variable whose value is copied into the OS keychain at startup.
+
+[[profiles]]
+name = "TUM"
+
+# Outgoing mail
+smtp_host = "postout.lrz.de"
+smtp_port = 587
+security = "starttls" # starttls, tls, or none
+verify_tls = true
+username = "YOUR_LRZ_ID"
+auth_type = "password"
+password_env = "TUM_MAIL_PASSWORD"
+
+# Incoming mail / future bounce polling
+imap_host = "xmail.mwn.de"
+imap_port = 993
+imap_security = "tls"
+
+# Sending guardrails
+daily_cap = 250
+delay_seconds = 2
+max_message_bytes = 20000000
+
+# Add further accounts with additional [[profiles]] sections.

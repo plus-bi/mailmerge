@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Local Mail Merge
+Exec=mailmerge
+Icon=mail-send
+Categories=Office;Email;
+
