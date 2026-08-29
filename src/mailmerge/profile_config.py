@@ -3,16 +3,19 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Profile
 from .secrets import set_secret
+from .rendering import valid_email
 
 ALLOWED_FIELDS = {
     "smtp_host", "smtp_port", "security", "verify_tls", "username", "auth_type",
-    "daily_cap", "delay_seconds", "max_message_bytes", "imap_host", "imap_port", "imap_security",
+    "daily_cap", "delay_seconds", "max_message_bytes", "reply_to", "list_unsubscribe",
+    "list_unsubscribe_one_click", "imap_host", "imap_port", "imap_security",
 }
 
 
@@ -45,6 +48,16 @@ def load_profiles(path: Path, db: Session) -> list[Profile]:
             raise ValueError(f"profile {name!r} has invalid SMTP security")
         if imap_security not in {None, "starttls", "tls", "none"}:
             raise ValueError(f"profile {name!r} has invalid IMAP security")
+        reply_to = entry.get("reply_to")
+        if reply_to and not valid_email(str(reply_to)):
+            raise ValueError(f"profile {name!r} has invalid reply_to")
+        unsubscribe = entry.get("list_unsubscribe")
+        if unsubscribe:
+            parsed = urlparse(str(unsubscribe).strip("<>"))
+            if parsed.scheme not in {"https", "mailto"}:
+                raise ValueError(f"profile {name!r} list_unsubscribe must use https or mailto")
+        if entry.get("list_unsubscribe_one_click") and (not unsubscribe or urlparse(str(unsubscribe).strip("<>")).scheme != "https"):
+            raise ValueError(f"profile {name!r} one-click unsubscribe requires an https list_unsubscribe URL")
 
         profile = db.scalar(select(Profile).where(Profile.name == name))
         values = {key: entry[key] for key in ALLOWED_FIELDS if key in entry}

@@ -38,6 +38,9 @@ class Profile(Base):
     daily_cap: Mapped[int] = mapped_column(Integer, default=250)
     delay_seconds: Mapped[int] = mapped_column(Integer, default=2)
     max_message_bytes: Mapped[int] = mapped_column(Integer, default=20_000_000)
+    reply_to: Mapped[str | None] = mapped_column(String(320))
+    list_unsubscribe: Mapped[str | None] = mapped_column(String(1000))
+    list_unsubscribe_one_click: Mapped[bool] = mapped_column(Boolean, default=False)
     imap_host: Mapped[str | None] = mapped_column(String(255))
     imap_port: Mapped[int | None] = mapped_column(Integer)
     imap_security: Mapped[str | None] = mapped_column(String(20))
@@ -130,4 +133,3 @@ class SyncCursor(Base):
     name: Mapped[str] = mapped_column(String, primary_key=True)
     cursor: Mapped[str] = mapped_column(String, default="0")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
-

@@ -50,7 +50,7 @@ def process_campaign(campaign_id: str) -> None:
                     values = dict(recipient.values)
                     values.setdefault("email", recipient.email)
                     rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
-                    message = build_message(campaign, recipient.email, rendered)
+                    message = build_message(campaign, recipient.email, rendered, profile)
                     send(client, message)
                     recipient.status = "sent"
                     recipient.message_id = message["Message-ID"]

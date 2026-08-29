@@ -46,6 +46,13 @@ def run() -> None:
             message["From"] = f"{args.from_name} <{args.sender}>"
             message["To"] = args.recipient
             message["Subject"] = args.subject
+            if profile.reply_to:
+                message["Reply-To"] = profile.reply_to
+            if profile.list_unsubscribe:
+                value = profile.list_unsubscribe
+                message["List-Unsubscribe"] = value if value.startswith("<") else f"<{value}>"
+            if profile.list_unsubscribe_one_click:
+                message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
             message.set_content(
                 "This is a Local Mail Merge SMTP configuration test.\n\n"
                 f"Profile: {profile.name}\n"

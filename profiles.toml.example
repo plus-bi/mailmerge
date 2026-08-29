@@ -16,6 +16,12 @@ username = "YOUR_LRZ_ID"
 auth_type = "password"
 password_env = "TUM_MAIL_PASSWORD"
 
+# Optional message headers applied by default to this profile. A campaign's
+# explicit Reply-To takes precedence over the profile value.
+reply_to = "replies@example.com"
+list_unsubscribe = "https://unsubscribe.example.com/u/PROFILE-OR-LIST-TOKEN"
+list_unsubscribe_one_click = true
+
 # Incoming mail / future bounce polling
 imap_host = "xmail.mwn.de"
 imap_port = 993

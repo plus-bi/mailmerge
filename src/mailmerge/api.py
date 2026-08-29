@@ -42,6 +42,9 @@ class ProfileIn(BaseModel):
     daily_cap: int = Field(default=250, ge=1)
     delay_seconds: int = Field(default=2, ge=0)
     max_message_bytes: int = Field(default=20_000_000, ge=1024)
+    reply_to: str | None = None
+    list_unsubscribe: str | None = None
+    list_unsubscribe_one_click: bool = False
     imap_host: str | None = None
     imap_port: int | None = None
     imap_security: str | None = None
@@ -59,6 +62,9 @@ class ProfileOut(ORMModel):
     daily_cap: int
     delay_seconds: int
     max_message_bytes: int
+    reply_to: str | None
+    list_unsubscribe: str | None
+    list_unsubscribe_one_click: bool
     imap_host: str | None
     imap_port: int | None
     imap_security: str | None
@@ -200,7 +206,7 @@ def preflight(campaign: Campaign, db: Session) -> dict:
         values.setdefault("email", recipient.email)
         try:
             rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
-            message = build_message(campaign, recipient.email, rendered)
+            message = build_message(campaign, recipient.email, rendered, profile)
             size = len(message.as_bytes())
             if profile and size > profile.max_message_bytes:
                 raise ValueError(f"estimated message size {size} exceeds profile limit")
