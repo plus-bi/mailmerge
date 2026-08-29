@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     profile_config: Path | None = None
     session_token: str = ""
     worker_poll_seconds: float = 2.0
+    unsubscribe_sync_url: str | None = None
+    unsubscribe_sync_secret: str | None = None
+    unsubscribe_db: Path | None = None
 
     def prepare(self) -> "Settings":
         try:

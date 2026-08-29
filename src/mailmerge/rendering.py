@@ -13,7 +13,7 @@ try:
     from bs4 import BeautifulSoup
 except ImportError:
     BeautifulSoup = None
-from jinja2 import StrictUndefined
+from jinja2 import StrictUndefined, meta
 from jinja2.sandbox import SandboxedEnvironment
 
 
@@ -43,6 +43,26 @@ class RenderedMessage:
 def valid_email(value: str) -> bool:
     _, address = parseaddr(value)
     return address == value.strip() and bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", address))
+
+
+def extract_variables(template_str: str) -> set[str]:
+    if not template_str:
+        return set()
+    try:
+        ast = ENV.parse(template_str)
+        return meta.find_undeclared_variables(ast)
+    except Exception:
+        return set()
+
+
+def get_required_variables(subject_template: str, body_template: str) -> set[str]:
+    return extract_variables(subject_template) | extract_variables(body_template)
+
+
+def validate_template_variables(subject_template: str, body_template: str, values: dict) -> list[str]:
+    required = get_required_variables(subject_template, body_template)
+    missing = [var for var in sorted(required) if var not in values or values[var] is None or values[var] == ""]
+    return missing
 
 
 def html_to_text(html: str) -> str:

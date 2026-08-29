@@ -6,8 +6,9 @@ import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from jinja2 import TemplateError
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,13 +16,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .csv_import import parse_csv
 from .db import SessionLocal, get_db
+from .json_import import parse_recipients_json
 from .messages import build_message
 from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
 from .profile_config import load_profiles
-from .rendering import render_message
-from .secrets import set_secret
+from .rendering import render_message, validate_template_variables
+from .secrets import get_secret, set_secret
+from .smtp import connect, send
+from .suppression import sync_suppressions
 
 router = APIRouter(prefix="/api/v1")
 
@@ -45,6 +48,10 @@ class ProfileIn(BaseModel):
     reply_to: str | None = None
     list_unsubscribe: str | None = None
     list_unsubscribe_one_click: bool = False
+    working_hours_enabled: bool = False
+    working_hours_start: int = Field(default=9, ge=0, le=23)
+    working_hours_end: int = Field(default=17, ge=0, le=23)
+    working_hours_timezone: str = "UTC"
     imap_host: str | None = None
     imap_port: int | None = None
     imap_security: str | None = None
@@ -65,6 +72,10 @@ class ProfileOut(ORMModel):
     reply_to: str | None
     list_unsubscribe: str | None
     list_unsubscribe_one_click: bool
+    working_hours_enabled: bool
+    working_hours_start: int
+    working_hours_end: int
+    working_hours_timezone: str
     imap_host: str | None
     imap_port: int | None
     imap_security: str | None
@@ -80,6 +91,11 @@ class CampaignIn(BaseModel):
     subject_template: str = ""
     body_mode: str = "markdown"
     body_template: str = ""
+    delay_seconds: int | None = None
+    working_hours_enabled: bool = False
+    working_hours_start: int = Field(default=9, ge=0, le=23)
+    working_hours_end: int = Field(default=17, ge=0, le=23)
+    working_hours_timezone: str = "UTC"
     consent_acknowledged: bool = False
     unsubscribe_base_url: str | None = None
 
@@ -89,11 +105,42 @@ class CampaignOut(ORMModel):
     name: str
     purpose: str
     profile_id: str | None
+    from_name: str
+    from_address: str
+    reply_to: str | None
     state: CampaignState
     subject_template: str
     body_mode: str
     body_template: str
+    delay_seconds: int | None
+    working_hours_enabled: bool
+    working_hours_start: int
+    working_hours_end: int
+    working_hours_timezone: str
+    consent_acknowledged: bool
+    suppression_synced: bool
+    unsubscribe_base_url: str | None
     scheduled_at: datetime | None
+
+
+class RecipientOut(ORMModel):
+    id: str
+    campaign_id: str
+    email: str
+    normalized_email: str
+    values: dict[str, Any]
+    included: bool
+    valid: bool
+    validation_error: str | None
+    suppressed: bool
+    status: str
+    message_id: str | None
+    sent_at: datetime | None
+
+
+class TestEmailIn(BaseModel):
+    recipient_email: str
+    sample_recipient_id: str | None = None
 
 
 @router.get("/profiles", response_model=list[ProfileOut])
@@ -161,20 +208,56 @@ def update_campaign(campaign_id: str, data: CampaignIn, db: Session = Depends(ge
     return campaign
 
 
-@router.post("/campaigns/{campaign_id}/csv")
-async def import_csv(campaign_id: str, email_column: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
+@router.get("/campaigns/{campaign_id}/recipients", response_model=list[RecipientOut])
+def get_recipients(campaign_id: str, db: Session = Depends(get_db)):
+    _campaign(db, campaign_id)
+    return db.scalars(select(Recipient).where(Recipient.campaign_id == campaign_id).order_by(Recipient.id)).all()
+
+
+@router.post("/campaigns/{campaign_id}/recipients")
+async def import_recipients(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     campaign = _campaign(db, campaign_id)
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        uploaded = form.get("file")
+        if not uploaded or not hasattr(uploaded, "read"):
+            raise HTTPException(422, "file field is required in multipart upload")
+        raw_content = await uploaded.read()
+    else:
+        raw_content = await request.body()
+
     try:
-        headers, rows = parse_csv(await file.read(), email_column)
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
+        keys, rows = parse_recipients_json(
+            raw_content,
+            subject_template=campaign.subject_template,
+            body_template=campaign.body_template,
+        )
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(422, f"Failed to parse recipients JSON: {exc}") from exc
+
     db.query(Recipient).filter(Recipient.campaign_id == campaign.id).delete()
     for row in rows:
-        db.add(Recipient(campaign_id=campaign.id, email=row.email, normalized_email=row.email.casefold(), values=row.values,
-                         included=row.valid, valid=row.valid, validation_error=row.error))
+        db.add(
+            Recipient(
+                campaign_id=campaign.id,
+                email=row.email,
+                normalized_email=row.email.casefold(),
+                values=row.values,
+                included=row.valid,
+                valid=row.valid,
+                validation_error=row.error,
+            )
+        )
     db.commit()
-    return {"headers": headers, "imported": len(rows), "valid": sum(row.valid for row in rows),
-            "duplicates": sum(row.duplicate for row in rows)}
+    return {
+        "keys": keys,
+        "imported": len(rows),
+        "valid": sum(1 for r in rows if r.valid),
+        "duplicates": sum(1 for r in rows if r.duplicate),
+        "errors": [f"{r.email or 'row'}: {r.error}" for r in rows if r.error],
+    }
 
 
 @router.post("/campaigns/{campaign_id}/attachments")
@@ -185,8 +268,14 @@ async def add_attachment(campaign_id: str, file: UploadFile = File(...), db: Ses
     destination = settings.data_dir / "attachments" / f"{attachment_id}-{safe_name}"
     with destination.open("wb") as output:
         shutil.copyfileobj(file.file, output)
-    attachment = Attachment(id=attachment_id, campaign_id=campaign.id, filename=safe_name, path=str(destination),
-                            content_type=file.content_type or "application/octet-stream", size=destination.stat().st_size)
+    attachment = Attachment(
+        id=attachment_id,
+        campaign_id=campaign.id,
+        filename=safe_name,
+        path=str(destination),
+        content_type=file.content_type or "application/octet-stream",
+        size=destination.stat().st_size,
+    )
     db.add(attachment)
     db.commit()
     return {"id": attachment.id, "filename": attachment.filename, "size": attachment.size}
@@ -199,11 +288,19 @@ def preflight(campaign: Campaign, db: Session) -> dict:
         errors.append("sender profile is required")
     profile = db.get(Profile, campaign.profile_id) if campaign.profile_id else None
     recipients = db.scalars(select(Recipient).where(Recipient.campaign_id == campaign.id)).all()
+
     for recipient in recipients:
         if not recipient.included or not recipient.valid or recipient.suppressed:
             continue
         values = dict(recipient.values)
         values.setdefault("email", recipient.email)
+
+        # Validate that all required template variables are populated
+        missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
+        if missing_vars:
+            errors.append(f"{recipient.email}: missing required template variable(s): {', '.join(missing_vars)}")
+            continue
+
         try:
             rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
             message = build_message(campaign, recipient.email, rendered, profile)
@@ -212,12 +309,24 @@ def preflight(campaign: Campaign, db: Session) -> dict:
                 raise ValueError(f"estimated message size {size} exceeds profile limit")
             if campaign.purpose == "marketing" and "unsubscribe_url" not in values and "unsubscribe_url" not in campaign.body_template:
                 raise ValueError("marketing message must visibly include unsubscribe_url")
-            previews.append({"recipient_id": recipient.id, "email": recipient.email, "subject": rendered.subject,
-                             "html": rendered.html, "text": rendered.text, "size": size})
+            previews.append(
+                {
+                    "recipient_id": recipient.id,
+                    "email": recipient.email,
+                    "subject": rendered.subject,
+                    "html": rendered.html,
+                    "text": rendered.text,
+                    "size": size,
+                    "values": values,
+                    "missing_variables": missing_vars,
+                }
+            )
         except (TemplateError, ValueError) as exc:
             errors.append(f"{recipient.email}: {exc}")
-    if not previews:
+
+    if not previews and not errors:
         errors.append("no sendable recipients")
+
     if campaign.purpose == "marketing":
         if not campaign.consent_acknowledged:
             errors.append("marketing consent must be acknowledged")
@@ -225,13 +334,106 @@ def preflight(campaign: Campaign, db: Session) -> dict:
             errors.append("suppression synchronization is required")
         if not campaign.unsubscribe_base_url:
             errors.append("unsubscribe service is required")
-    return {"ok": not errors, "errors": errors, "previews": previews,
-            "excluded": len(recipients) - len(previews), "attachments": [{"name": a.filename, "size": a.size} for a in campaign.attachments]}
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "previews": previews,
+        "excluded": len(recipients) - len(previews),
+        "attachments": [{"name": a.filename, "size": a.size} for a in campaign.attachments],
+    }
 
 
 @router.post("/campaigns/{campaign_id}/preflight")
 def run_preflight(campaign_id: str, db: Session = Depends(get_db)):
     return preflight(_campaign(db, campaign_id), db)
+
+
+@router.get("/campaigns/{campaign_id}/preview/{recipient_id}")
+def preview_recipient(campaign_id: str, recipient_id: str, db: Session = Depends(get_db)):
+    campaign = _campaign(db, campaign_id)
+    recipient = db.get(Recipient, recipient_id)
+    if not recipient or recipient.campaign_id != campaign.id:
+        raise HTTPException(404, "recipient not found in this campaign")
+    values = dict(recipient.values)
+    values.setdefault("email", recipient.email)
+    missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
+    try:
+        rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
+        return {
+            "recipient_id": recipient.id,
+            "email": recipient.email,
+            "subject": rendered.subject,
+            "html": rendered.html,
+            "text": rendered.text,
+            "values": values,
+            "missing_variables": missing_vars,
+        }
+    except Exception as exc:
+        raise HTTPException(422, f"Failed to render message: {exc}") from exc
+
+
+@router.post("/campaigns/{campaign_id}/suppression/sync")
+def trigger_suppression_sync(campaign_id: str, db: Session = Depends(get_db)):
+    campaign = _campaign(db, campaign_id)
+    synced_count = sync_suppressions(db)
+    campaign.suppression_synced = True
+    db.commit()
+    suppressed_count = db.scalar(
+        select(func.count()).select_from(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.suppressed)
+    ) or 0
+    return {"ok": True, "synced_events": synced_count, "campaign_suppressed_recipients": suppressed_count}
+
+
+@router.post("/campaigns/{campaign_id}/test-email")
+def send_test_email(campaign_id: str, data: TestEmailIn, db: Session = Depends(get_db)):
+    campaign = _campaign(db, campaign_id)
+    if not campaign.profile_id:
+        raise HTTPException(400, "campaign does not have an assigned profile")
+    profile = db.get(Profile, campaign.profile_id)
+    if not profile:
+        raise HTTPException(404, "sender profile not found")
+
+    sample_recipient = None
+    if data.sample_recipient_id:
+        sample_recipient = db.get(Recipient, data.sample_recipient_id)
+    if not sample_recipient:
+        sample_recipient = db.scalar(
+            select(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.valid).order_by(Recipient.id)
+        )
+
+    values = dict(sample_recipient.values) if sample_recipient else {}
+    values.setdefault("email", data.recipient_email)
+
+    missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
+    if missing_vars:
+        raise HTTPException(422, f"Missing required template variable(s): {', '.join(missing_vars)}")
+
+    try:
+        rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
+        # Prefix subject with [TEST]
+        test_rendered = type(rendered)(
+            subject=f"[TEST] {rendered.subject}",
+            html=rendered.html,
+            text=rendered.text,
+        )
+        message = build_message(campaign, data.recipient_email, test_rendered, profile)
+        client = connect(
+            profile,
+            password=get_secret(profile.id, "password"),
+            access_token=get_secret(profile.id, "access_token"),
+        )
+        try:
+            send(client, message)
+        finally:
+            try:
+                client.quit()
+            except Exception:
+                pass
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to send test email: {exc}") from exc
+
+    return {"ok": True, "recipient_email": data.recipient_email, "subject": message["Subject"]}
 
 
 class ScheduleIn(BaseModel):
@@ -247,14 +449,29 @@ def schedule(campaign_id: str, data: ScheduleIn, db: Session = Depends(get_db)):
         raise HTTPException(409, detail=result["errors"])
     profile = db.get(Profile, campaign.profile_id)
     count = len(result["previews"])
-    sent_24h = db.scalar(select(func.count()).select_from(DeliveryAttempt).where(
-        DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= datetime.now(timezone.utc) - timedelta(hours=24))) or 0
+    sent_24h = (
+        db.scalar(
+            select(func.count())
+            .select_from(DeliveryAttempt)
+            .where(
+                DeliveryAttempt.outcome == "sent",
+                DeliveryAttempt.attempted_at >= datetime.now(timezone.utc) - timedelta(hours=24),
+            )
+        )
+        or 0
+    )
     if sent_24h + count > profile.daily_cap and not data.confirm_guardrail_override:
         raise HTTPException(409, "rolling daily cap exceeded; explicit override confirmation required")
     campaign.guardrail_override = sent_24h + count > profile.daily_cap
     campaign.scheduled_at = data.scheduled_at.astimezone(timezone.utc)
     campaign.state = CampaignState.scheduled
-    db.add(AuditLog(campaign_id=campaign.id, action="scheduled", detail={"at": campaign.scheduled_at.isoformat(), "guardrail_override": campaign.guardrail_override}))
+    db.add(
+        AuditLog(
+            campaign_id=campaign.id,
+            action="scheduled",
+            detail={"at": campaign.scheduled_at.isoformat(), "guardrail_override": campaign.guardrail_override},
+        )
+    )
     db.commit()
     return {"state": campaign.state, "scheduled_at": campaign.scheduled_at}
 
@@ -262,8 +479,12 @@ def schedule(campaign_id: str, data: ScheduleIn, db: Session = Depends(get_db)):
 @router.post("/campaigns/{campaign_id}/{action}")
 def control(campaign_id: str, action: str, db: Session = Depends(get_db)):
     campaign = _campaign(db, campaign_id)
-    transitions = {"pause": CampaignState.paused, "resume": CampaignState.scheduled,
-                   "cancel": CampaignState.cancelled, "confirm-overdue": CampaignState.scheduled}
+    transitions = {
+        "pause": CampaignState.paused,
+        "resume": CampaignState.scheduled,
+        "cancel": CampaignState.cancelled,
+        "confirm-overdue": CampaignState.scheduled,
+    }
     if action not in transitions:
         raise HTTPException(404)
     campaign.state = transitions[action]
@@ -283,11 +504,18 @@ async def events(campaign_id: str):
                 if not campaign:
                     yield "event: error\ndata: not found\n\n"
                     return
-                counts = dict(db.execute(select(Recipient.status, func.count()).where(Recipient.campaign_id == campaign_id).group_by(Recipient.status)).all())
+                counts = dict(
+                    db.execute(
+                        select(Recipient.status, func.count())
+                        .where(Recipient.campaign_id == campaign_id)
+                        .group_by(Recipient.status)
+                    ).all()
+                )
                 yield f"data: {json.dumps({'state': campaign.state.value, 'counts': counts})}\n\n"
                 if campaign.state in {CampaignState.completed, CampaignState.cancelled, CampaignState.failed}:
                     return
             await asyncio.sleep(2)
+
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
