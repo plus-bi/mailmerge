@@ -25,6 +25,25 @@ Only the publishable key belongs in the frontend file. Never put `CLERK_SECRET_K
 
 ## Deploy an update
 
+The repository includes an update script. Run it as the deployment user, not with `sudo`:
+
+```bash
+cd /opt/mailmerge
+./deploy/update.sh
+```
+
+That deploys the latest fast-forward commit from the current branch. To deploy a specific commit or remote ref:
+
+```bash
+./deploy/update.sh <commit-or-ref>
+```
+
+The script refuses a dirty checkout, installs backend dependencies, validates Python sources, creates the frontend Clerk environment from `/opt/mailmerge/.env`, installs and checks frontend dependencies, builds and copies the served assets, restarts both services, and verifies them. If deployment files changed, it also rebuilds the unsubscribe containers.
+
+The service restart is non-blocking. The final requested status check is bounded to 15 seconds so a stuck user-systemd session cannot leave the deployment command hanging forever.
+
+### Manual equivalent
+
 Run on the VM as the same Linux user that owns the existing installation:
 
 ```bash
@@ -37,12 +56,14 @@ pip install -e .
 
 cd frontend
 npm ci
+npm run lint
 npm run build
 mkdir -p ~/.local/share/mailmerge/frontend
 cp -a dist/. ~/.local/share/mailmerge/frontend/
 
-systemctl --user restart mailmerge.service mailmerge-worker.service
-systemctl --user --no-pager status mailmerge.service mailmerge-worker.service
+systemctl --user daemon-reload
+systemctl --user restart --no-block mailmerge.service mailmerge-worker.service
+timeout 15s systemctl --user --no-pager status mailmerge.service mailmerge-worker.service
 ```
 
 If `git status --short` reports local changes, stop and reconcile them before pulling so deployment-specific edits are not overwritten.
