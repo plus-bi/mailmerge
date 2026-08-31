@@ -18,10 +18,11 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
 
 ## 📚 Documentation
 
-- 📖 [**User Guide** (`docs/USER_GUIDE.md`)](file:///home/haris/git/mailclient/docs/USER_GUIDE.md): Complete guide on writing templates, importing JSON data, live previewing, sending test emails, and configuring working hours.
-- 🏗️ [**Architecture & Developer Reference** (`docs/ARCHITECTURE.md`)](file:///home/haris/git/mailclient/docs/ARCHITECTURE.md): System architecture, database schema, background worker lifecycle, and codebase extension points.
-- 📡 [**REST API Reference** (`docs/API_REFERENCE.md`)](file:///home/haris/git/mailclient/docs/API_REFERENCE.md): Detailed documentation for all REST API endpoints, schemas, and SSE streams.
-- ☁️ [**GCE VM Deployment Guide** (`deploy/GCE_DEPLOYMENT.md`)](file:///home/haris/git/mailclient/deploy/GCE_DEPLOYMENT.md): Production deployment plan on Google Cloud Platform using Compute Engine, systemd user services, IAP tunneling, and Caddy HTTPS proxy.
+- 📖 [**User Guide** (`docs/USER_GUIDE.md`)](docs/USER_GUIDE.md): Templates, recipient import, sender profiles, previews, test messages, and delivery controls.
+- 🏗️ [**Architecture & Developer Reference** (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md): Components, data model, authentication, and worker lifecycle.
+- 📡 [**REST API Reference** (`docs/API_REFERENCE.md`)](docs/API_REFERENCE.md): API endpoints, schemas, and authentication.
+- ☁️ [**GCE Deployment Guide** (`deploy/GCE_DEPLOYMENT.md`)](deploy/GCE_DEPLOYMENT.md): VM provisioning, Clerk configuration, systemd services, unsubscribe hosting, verification, updates, and backups.
+- 🔄 [**Deployment Update Runbook** (`deploy/UPDATING.md`)](deploy/UPDATING.md): Short checklist for updating an existing installation.
 
 ---
 
@@ -30,6 +31,7 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
 ### Prerequisites
 - Python 3.12+
 - Node.js 18+ & npm
+- A Clerk application
 
 ### Installation & Setup
 
@@ -40,13 +42,16 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
    pip install -e '.[dev]'
    ```
 
-2. **Build the React Frontend**:
+2. **Configure Clerk and build the React frontend**:
    ```bash
    cd frontend
-   npm install
+   printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_replace_me\n' > .env.local
+   npm ci
    npm run build
    cd ..
    ```
+
+   Only put the publishable key in a `VITE_*` variable. Never put a Clerk secret key in frontend environment files.
 
 3. **Start the API Server**:
    ```bash
@@ -59,11 +64,9 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
    ```
 
 5. **Access the Web Dashboard**:
-   - The API session token is generated at `~/.local/share/mailmerge/session-token`.
-   - Open your browser to:
-     ```
-     http://127.0.0.1:8765/#token=<YOUR_SESSION_TOKEN>
-     ```
+   Open `http://127.0.0.1:8765` and sign in through Clerk. Add this URL to the allowed origins and redirect URLs for your Clerk application.
+
+For a GCE production deployment, follow [deploy/GCE_DEPLOYMENT.md](deploy/GCE_DEPLOYMENT.md).
 
 ---
 

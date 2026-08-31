@@ -6,7 +6,7 @@ import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -20,7 +20,7 @@ from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
 from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
-from .profile_config import load_profiles
+from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import render_message, validate_template_variables
 from .secrets import get_secret, set_secret
 from .smtp import connect, send
@@ -36,12 +36,13 @@ class ORMModel(BaseModel):
 class ProfileIn(BaseModel):
     name: str
     smtp_host: str
-    smtp_port: int = 587
-    security: str = "starttls"
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    security: Literal["starttls", "tls", "none"] = "starttls"
     verify_tls: bool = True
     username: str | None = None
-    auth_type: str = "password"
+    auth_type: Literal["password", "xoauth2"] = "password"
     password: str | None = None
+    access_token: str | None = None
     daily_cap: int = Field(default=250, ge=1)
     delay_seconds: int = Field(default=2, ge=0)
     max_message_bytes: int = Field(default=20_000_000, ge=1024)
@@ -53,8 +54,8 @@ class ProfileIn(BaseModel):
     working_hours_end: int = Field(default=17, ge=0, le=23)
     working_hours_timezone: str = "UTC"
     imap_host: str | None = None
-    imap_port: int | None = None
-    imap_security: str | None = None
+    imap_port: int | None = Field(default=None, ge=1, le=65535)
+    imap_security: Literal["starttls", "tls", "none"] | None = None
 
 
 class ProfileOut(ORMModel):
@@ -79,6 +80,10 @@ class ProfileOut(ORMModel):
     imap_host: str | None
     imap_port: int | None
     imap_security: str | None
+
+
+class ProfileFileIn(BaseModel):
+    content: str
 
 
 class CampaignIn(BaseModel):
@@ -150,13 +155,76 @@ def profiles(db: Session = Depends(get_db)):
 
 @router.post("/profiles", response_model=ProfileOut)
 def create_profile(data: ProfileIn, db: Session = Depends(get_db)):
-    values = data.model_dump(exclude={"password"})
+    values = data.model_dump(exclude={"password", "access_token"})
+    try:
+        validate_profile_entry({"name": data.name, **values})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if db.scalar(select(Profile).where(Profile.name == data.name.strip())):
+        raise HTTPException(409, "a sender profile with this name already exists")
+    values["name"] = data.name.strip()
     profile = Profile(**values)
     db.add(profile)
     db.commit()
     if data.password:
         set_secret(profile.id, "password", data.password)
+    if data.access_token:
+        set_secret(profile.id, "access_token", data.access_token)
     return profile
+
+
+@router.put("/profiles/{profile_id}", response_model=ProfileOut)
+def update_profile(profile_id: str, data: ProfileIn, db: Session = Depends(get_db)):
+    profile = db.get(Profile, profile_id)
+    if not profile:
+        raise HTTPException(404, "sender profile not found")
+    values = data.model_dump(exclude={"password", "access_token"})
+    try:
+        validate_profile_entry({"name": data.name, **values})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    duplicate = db.scalar(select(Profile).where(Profile.name == data.name.strip(), Profile.id != profile_id))
+    if duplicate:
+        raise HTTPException(409, "a sender profile with this name already exists")
+    values["name"] = data.name.strip()
+    for key, value in values.items():
+        setattr(profile, key, value)
+    db.commit()
+    if data.password:
+        set_secret(profile.id, "password", data.password)
+    if data.access_token:
+        set_secret(profile.id, "access_token", data.access_token)
+    return profile
+
+
+@router.get("/profile-config")
+def get_profile_config(db: Session = Depends(get_db)):
+    path = settings.profile_config_path
+    content = path.read_text() if path.is_file() else dump_profiles(list(db.scalars(select(Profile).order_by(Profile.name)).all()))
+    return {"filename": path.name, "content": content, "managed": path.is_file()}
+
+
+@router.post("/profile-config", response_model=list[ProfileOut])
+def import_profile_config(data: ProfileFileIn, db: Session = Depends(get_db)):
+    try:
+        loaded = load_profiles_text(data.content, db, require_password_env=False)
+        save_profile_file(settings.profile_config_path, data.content)
+        return loaded
+    except (OSError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.put("/profile-config")
+def save_profile_config(db: Session = Depends(get_db)):
+    profiles = list(db.scalars(select(Profile).order_by(Profile.name)).all())
+    if not profiles:
+        raise HTTPException(409, "create at least one sender profile before saving TOML")
+    content = dump_profiles(profiles)
+    try:
+        save_profile_file(settings.profile_config_path, content)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"filename": settings.profile_config_path.name, "content": content}
 
 
 @router.post("/profiles/lrz", response_model=ProfileOut)
@@ -169,10 +237,10 @@ def create_lrz_profile(db: Session = Depends(get_db)):
 
 @router.post("/profiles/reload", response_model=list[ProfileOut])
 def reload_profile_config(db: Session = Depends(get_db)):
-    if not settings.profile_config:
-        raise HTTPException(409, "MAILMERGE_PROFILE_CONFIG is not configured")
+    if not settings.profile_config_path.is_file():
+        raise HTTPException(409, "no profile TOML file has been configured or saved")
     try:
-        return load_profiles(settings.profile_config, db)
+        return load_profiles(settings.profile_config_path, db)
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -206,6 +274,27 @@ def update_campaign(campaign_id: str, data: CampaignIn, db: Session = Depends(ge
         setattr(campaign, key, value)
     db.commit()
     return campaign
+
+
+@router.delete("/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
+    campaign = _campaign(db, campaign_id)
+    if campaign.state == CampaignState.sending:
+        raise HTTPException(409, "Cannot delete a campaign while it is actively sending. Please pause or cancel it first.")
+
+    # Remove associated attachment files on disk
+    for attachment in campaign.attachments:
+        try:
+            p = Path(attachment.path)
+            if p.exists():
+                p.unlink()
+        except OSError:
+            pass
+
+    campaign_name = campaign.name
+    db.delete(campaign)
+    db.commit()
+    return {"ok": True, "id": campaign_id, "message": f"Campaign '{campaign_name}' deleted successfully"}
 
 
 @router.get("/campaigns/{campaign_id}/recipients", response_model=list[RecipientOut])

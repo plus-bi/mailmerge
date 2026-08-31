@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .api import router
+from .auth import verify_clerk_token
 from .config import settings
 from .db import SessionLocal, init_db
 from .profile_config import load_profiles
@@ -30,15 +31,36 @@ def find_frontend() -> Path | None:
 class LocalSecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path.startswith("/api/"):
-            token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-            if token != settings.session_token:
+            auth_header = request.headers.get("Authorization", "")
+            cookie_token = request.cookies.get("__session", "")
+
+            tokens_to_try: list[str] = []
+            if auth_header.startswith("Bearer "):
+                tokens_to_try.append(auth_header.removeprefix("Bearer ").strip())
+            if cookie_token:
+                tokens_to_try.append(cookie_token.strip())
+
+            is_valid = any(token and verify_clerk_token(token) for token in tokens_to_try)
+
+            if not is_valid:
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
             origin = request.headers.get("Origin")
-            if origin and origin != settings.frontend_origin:
+            allowed_origins = {o.strip() for o in settings.frontend_origin.split(",") if o.strip()}
+            if origin and origin not in allowed_origins:
                 return JSONResponse({"detail": "origin rejected"}, status_code=403)
         response = await call_next(request)
         response.headers.update({
-            "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.accounts.dev https://*.clerk.com; "
+                "connect-src 'self' https://*.clerk.accounts.dev https://*.clerk.com https://api.clerk.com; "
+                "img-src 'self' https://img.clerk.com data:; "
+                "worker-src 'self' blob:; "
+                "frame-src 'self' https://*.clerk.accounts.dev https://*.clerk.com; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com data:;"
+            ),
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer",
@@ -50,9 +72,9 @@ class LocalSecurityMiddleware(BaseHTTPMiddleware):
 
 def create_app() -> FastAPI:
     init_db()
-    if settings.profile_config:
+    if settings.profile_config_path.is_file():
         with SessionLocal() as db:
-            load_profiles(settings.profile_config, db)
+            load_profiles(settings.profile_config_path, db)
     app = FastAPI(title="Local Mail Merge", docs_url=None, redoc_url=None)
     app.add_middleware(LocalSecurityMiddleware)
     app.include_router(router)
@@ -67,7 +89,7 @@ def create_app() -> FastAPI:
     else:
         @app.get("/")
         def index():
-            return {"app": "Local Mail Merge", "token_file": str(settings.data_dir / "session-token")}
+            return {"app": "Local Mail Merge", "frontend": "not built"}
     return app
 
 

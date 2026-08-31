@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from mailmerge.api import router, preflight
+from mailmerge.config import settings
 from mailmerge.db import Base, get_db
 from mailmerge.models import Campaign, Profile, Recipient, CampaignState
 from mailmerge.suppression import sync_suppressions
@@ -107,6 +108,46 @@ def test_api_json_recipient_import_and_preflight(client, test_db_session):
     assert len(pf["previews"]) == 2  # Alice and Carol
     assert pf["excluded"] == 1  # Bob was excluded due to validation error
 
+    # 7. Delete Campaign
+    del_res = client.delete(f"/api/v1/campaigns/{campaign_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["ok"] is True
+
+    # 8. Verify Campaign and its recipients are deleted
+    get_res = client.get(f"/api/v1/campaigns/{campaign_id}")
+    assert get_res.status_code == 404
+
+
+def test_profile_manager_import_edit_and_save_toml(client, tmp_path, monkeypatch):
+    profile_path = tmp_path / "profiles.toml"
+    monkeypatch.setattr(settings, "profile_config", profile_path)
+    content = '''
+[[profiles]]
+name = "Imported SMTP"
+smtp_host = "smtp.example.com"
+smtp_port = 587
+security = "starttls"
+daily_cap = 75
+'''
+
+    imported = client.post("/api/v1/profile-config", json={"content": content})
+    assert imported.status_code == 200
+    profile = imported.json()[0]
+    assert profile_path.read_text() == content
+
+    profile["daily_cap"] = 120
+    updated = client.put(f"/api/v1/profiles/{profile['id']}", json=profile)
+    assert updated.status_code == 200
+    assert updated.json()["daily_cap"] == 120
+
+    saved = client.put("/api/v1/profile-config")
+    assert saved.status_code == 200
+    assert "daily_cap = 120" in profile_path.read_text()
+    exported = client.get("/api/v1/profile-config")
+    assert exported.status_code == 200
+    assert exported.json()["filename"] == "profiles.toml"
+
+
 
 def test_send_test_email(client, monkeypatch):
     # 1. Create Profile and Campaign
@@ -140,7 +181,11 @@ def test_send_test_email(client, monkeypatch):
     mock_smtp = MagicMock()
     mock_connect = MagicMock(return_value=mock_smtp)
 
-    with patch("mailmerge.api.connect", mock_connect), patch("mailmerge.api.send", lambda cl, msg: sent_messages.append(msg)):
+    with (
+        patch("mailmerge.api.get_secret", return_value=None),
+        patch("mailmerge.api.connect", mock_connect),
+        patch("mailmerge.api.send", lambda cl, msg: sent_messages.append(msg)),
+    ):
         res = client.post(
             f"/api/v1/campaigns/{campaign_id}/test-email",
             json={"recipient_email": "tester@example.com"},

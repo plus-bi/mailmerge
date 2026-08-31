@@ -35,20 +35,20 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
 
 ## Quickstart & Accessing the UI
 
-1. **Start the API server**:
+1. **Configure Clerk**:
+   - Set `VITE_CLERK_PUBLISHABLE_KEY` when building the frontend.
+   - Set `CLERK_PUBLISHABLE_KEY` or `CLERK_JWKS_URL` for the backend.
+   - Add the application URL to Clerk's allowed origins and redirect URLs.
+   - Never put a Clerk secret key in a `VITE_*` variable.
+2. **Start the API server**:
    ```bash
    mailmerge
    ```
-2. **Start the Background Worker** (in a separate terminal or systemd service):
+3. **Start the Background Worker** (in a separate terminal or systemd service):
    ```bash
    mailmerge-worker
    ```
-3. **Open the Web UI**:
-   - The session token is stored at `~/.local/share/mailmerge/session-token`.
-   - Open your browser to:
-     ```
-     http://127.0.0.1:8765/#token=<YOUR_SESSION_TOKEN>
-     ```
+4. **Open the Web UI** at `http://127.0.0.1:8765` and sign in through Clerk.
 
 ---
 
@@ -56,8 +56,11 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
 
 ### Step 1: Configure Sender Profile & Campaign Details
 
-1. In the Web UI, select an existing campaign or click **"+ New Campaign"**.
-2. Under the **📝 Setup & Template** tab:
+1. Click **"+ New Profile"** in the header to open the sender profile manager.
+2. Create a profile by entering the SMTP server, authentication, and sending-limit settings, then click **Save profile**. The credential is stored in the OS keychain; the remaining settings are saved to the configured TOML file or the app-managed `profiles.toml` in its data directory.
+3. Use **Load TOML** to import and activate an existing `[[profiles]]` file. Use **Download TOML** to save a credential-free backup.
+4. Select an existing campaign or click **"+ New Campaign"**.
+5. Under the **📝 Setup & Template** tab:
    - **Campaign Name**: e.g. `Q3 Community Update`.
    - **Sender Profile**: Select your configured SMTP profile (e.g. `LRZ`, `Postmark`, `Gmail/Workspace`).
    - **From Name**: The display name visible in the recipient's email client (e.g., `Alice from Acme`).

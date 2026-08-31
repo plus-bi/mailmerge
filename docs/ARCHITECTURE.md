@@ -31,8 +31,8 @@ flowchart TD
         SMTP["Remote SMTP Servers (LRZ, Postmark, Google Workspace, etc.)"]
     end
 
-    Browser -->|REST API + Bearer Token| API
-    Browser -->|SSE (/events)| API
+    Browser -->|REST API + Clerk JWT| API
+    Browser -->|SSE + Clerk session cookie| API
     API -->|Read / Write| DB
     API -->|Extract AST & Validate| Renderer
     API -->|Parse & Sanitize| JSONParser
@@ -145,8 +145,8 @@ The worker (`mailmerge.worker.run`) executes in a dedicated process:
 
 ## Security & Privacy Design Principles
 
-1. **Loopback Binding**: The FastAPI application binds exclusively to `127.0.0.1`.
-2. **Session Token Authentication**: API requests require `Authorization: Bearer <session-token>` matching the locally generated token file with `0600` permissions.
+1. **Loopback Binding**: The FastAPI application binds exclusively to `127.0.0.1` by default.
+2. **Clerk Authentication**: API requests require a verified Clerk JWT supplied as a bearer token or through Clerk's same-origin `__session` cookie. The application no longer creates or accepts its former local session token.
 3. **OS Keyring Integration**: Passwords and OAuth tokens are never written to SQLite or configuration files. They reside in the OS secure credential store.
 4. **No Tracking Pixels or URL Rewrites**: The application does not inject tracking pixels, open beacons, or redirect tracking links, guaranteeing complete recipient privacy.
 5. **Signed Unsubscribe URLs**: HMAC-SHA256 signatures ensure tokens cannot be forged or enumerated by third parties.

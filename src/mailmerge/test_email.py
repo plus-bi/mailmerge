@@ -34,8 +34,8 @@ def run() -> None:
     init_db()
     try:
         with SessionLocal() as db:
-            if settings.profile_config:
-                load_profiles(settings.profile_config, db)
+            if settings.profile_config_path.is_file():
+                load_profiles(settings.profile_config_path, db)
             profile = db.scalar(select(Profile).where(Profile.name == args.profile))
             if profile is None:
                 names = db.scalars(select(Profile.name).order_by(Profile.name)).all()

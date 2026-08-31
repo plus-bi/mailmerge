@@ -1,7 +1,7 @@
 # Local Mail Merge - REST API Reference
 
 Base URL: `http://127.0.0.1:8765/api/v1`  
-Authentication: `Authorization: Bearer <session-token>`
+Authentication: Clerk session JWT in `Authorization: Bearer <clerk-jwt>`, or the same-origin Clerk `__session` cookie. Legacy local session tokens are not accepted.
 
 ---
 
@@ -62,6 +62,18 @@ Creates a new sender profile.
   "working_hours_timezone": "Europe/Berlin"
 }
 ```
+
+### `PUT /profiles/{profile_id}`
+Updates an existing sender profile. Supplying a blank credential preserves the credential already stored in the OS keychain.
+
+### `GET /profile-config`
+Returns the active TOML profile file for download. Credentials are never included in generated TOML.
+
+### `POST /profile-config`
+Validates and imports TOML supplied as `{ "content": "..." }`, upserts profiles by name, and stores the file as the active configuration.
+
+### `PUT /profile-config`
+Serializes all current database profiles and atomically saves them to the active TOML configuration file.
 
 ---
 

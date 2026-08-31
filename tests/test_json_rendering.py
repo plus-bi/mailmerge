@@ -121,3 +121,31 @@ def test_working_hours_guardrail():
 @pytest.mark.parametrize("value", ["a@b.example", "first.last+tag@example.com"])
 def test_valid_email(value):
     assert valid_email(value)
+
+
+def test_jsonlines_import_string_and_bytes():
+    jsonl_str = (
+        '{"email": "alice@example.com", "name": "Alice", "team": "Platform"}\n'
+        '{"email": "bob@example.com", "name": "Bob", "team": "Data"}\n'
+        '\n'  # empty line should be ignored
+        '{"email": "charlie@example.com", "name": "Charlie", "team": "Security"}\n'
+    )
+    keys, rows = parse_recipients_json(jsonl_str)
+    assert set(keys) == {"email", "name", "team"}
+    assert len(rows) == 3
+    assert all(r.valid for r in rows)
+    assert rows[0].email == "alice@example.com"
+    assert rows[0].values["team"] == "Platform"
+    assert rows[1].email == "bob@example.com"
+    assert rows[2].email == "charlie@example.com"
+
+    # Also test bytes with utf-8-sig
+    keys_b, rows_b = parse_recipients_json(jsonl_str.encode("utf-8-sig"))
+    assert len(rows_b) == 3
+    assert rows_b[0].email == "alice@example.com"
+
+
+def test_jsonlines_invalid_syntax_raises():
+    invalid_jsonl = '{"email": "valid@example.com"}\n{not valid json}'
+    with pytest.raises(ValueError, match="Invalid JSON/JSONLines syntax"):
+        parse_recipients_json(invalid_jsonl)

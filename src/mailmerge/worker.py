@@ -165,9 +165,9 @@ def tick() -> None:
 
 def run() -> None:
     init_db()
-    if settings.profile_config:
+    if settings.profile_config_path.is_file():
         with SessionLocal() as db:
-            load_profiles(settings.profile_config, db)
+            load_profiles(settings.profile_config_path, db)
     while True:
         tick()
         time.sleep(settings.worker_poll_seconds)

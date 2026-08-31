@@ -23,10 +23,35 @@ def parse_recipients_json(
     body_template: str = "",
 ) -> tuple[list[str], list[ImportedRecipient]]:
     if isinstance(raw_data, bytes):
-        text = raw_data.decode("utf-8-sig")
-        parsed = json.loads(text)
+        text = raw_data.decode("utf-8-sig").strip()
     elif isinstance(raw_data, str):
-        parsed = json.loads(raw_data)
+        text = raw_data.strip()
+    else:
+        text = None
+
+    if text is not None:
+        if not text:
+            raise ValueError("Input data is empty")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # Fallback: parse as JSONLines (NDJSON), one JSON object per non-empty line
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            if not lines:
+                raise ValueError("Input data is empty")
+            records = []
+            for index, line in enumerate(lines):
+                try:
+                    line_obj = json.loads(line)
+                    if isinstance(line_obj, dict):
+                        records.append(line_obj)
+                    elif isinstance(line_obj, list):
+                        records.extend(line_obj)
+                    else:
+                        raise ValueError(f"Line {index + 1} is not a JSON object")
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid JSON/JSONLines syntax on line {index + 1}: {exc}") from exc
+            parsed = records
     else:
         parsed = raw_data
 
@@ -42,7 +67,7 @@ def parse_recipients_json(
     elif isinstance(parsed, list):
         records = parsed
     else:
-        raise ValueError("JSON data must be a list of recipient objects or an object containing a 'recipients' list")
+        raise ValueError("JSON data must be a list of recipient objects, JSONLines records, or an object containing a 'recipients' list")
 
     required_vars = get_required_variables(subject_template, body_template)
     all_keys: set[str] = set()

@@ -1,5 +1,13 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  ClerkProvider,
+  Show,
+  SignInButton,
+  SignUpButton,
+  UserButton,
+  useAuth,
+} from '@clerk/react';
 import './style.css';
 
 type Profile = {
@@ -7,9 +15,52 @@ type Profile = {
   name: string;
   smtp_host: string;
   smtp_port: number;
+  security: 'starttls' | 'tls' | 'none';
+  verify_tls: boolean;
+  username: string | null;
+  auth_type: string;
   daily_cap: number;
   delay_seconds: number;
+  max_message_bytes: number;
+  reply_to: string | null;
+  list_unsubscribe: string | null;
+  list_unsubscribe_one_click: boolean;
+  working_hours_enabled: boolean;
+  working_hours_start: number;
+  working_hours_end: number;
+  working_hours_timezone: string;
+  imap_host: string | null;
+  imap_port: number | null;
+  imap_security: 'starttls' | 'tls' | 'none' | null;
 };
+
+type ProfileDraft = Omit<Profile, 'id'> & { password: string };
+
+const blankProfile = (): ProfileDraft => ({
+  name: '',
+  smtp_host: '',
+  smtp_port: 587,
+  security: 'starttls',
+  verify_tls: true,
+  username: '',
+  auth_type: 'password',
+  password: '',
+  daily_cap: 250,
+  delay_seconds: 2,
+  max_message_bytes: 20000000,
+  reply_to: '',
+  list_unsubscribe: '',
+  list_unsubscribe_one_click: false,
+  working_hours_enabled: false,
+  working_hours_start: 9,
+  working_hours_end: 17,
+  working_hours_timezone: 'UTC',
+  imap_host: '',
+  imap_port: null,
+  imap_security: null,
+});
+
+const profileToDraft = (profile: Profile): ProfileDraft => ({ ...profile, password: '' });
 
 type Campaign = {
   id: string;
@@ -63,32 +114,31 @@ type PreflightResult = {
   attachments: { name: string; size: number }[];
 };
 
-const token = new URLSearchParams(location.hash.slice(1)).get('token') || localStorage.getItem('mailmerge-token') || '';
-if (token) localStorage.setItem('mailmerge-token', token);
+function Dashboard() {
+  const { getToken } = useAuth();
 
-const api = async (path: string, init: RequestInit = {}) => {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    ...(init.headers as Record<string, string> || {}),
+  const api = async (path: string, init: RequestInit = {}) => {
+    const clerkToken = await getToken();
+    const headers: Record<string, string> = {
+      ...(clerkToken ? { Authorization: `Bearer ${clerkToken}` } : {}),
+      ...((init.headers as Record<string, string>) || {}),
+    };
+    if (!(init.body instanceof FormData) && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const res = await fetch('/api/v1' + path, { ...init, headers });
+    if (!res.ok) {
+      const errorText = await res.text();
+      let detail = errorText;
+      try {
+        const parsed = JSON.parse(errorText);
+        detail = parsed.detail || parsed.message || errorText;
+        if (Array.isArray(detail)) detail = detail.join('\n');
+      } catch {}
+      throw new Error(detail);
+    }
+    return res.json();
   };
-  if (!(init.body instanceof FormData) && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
-  }
-  const res = await fetch('/api/v1' + path, { ...init, headers });
-  if (!res.ok) {
-    const errorText = await res.text();
-    let detail = errorText;
-    try {
-      const parsed = JSON.parse(errorText);
-      detail = parsed.detail || parsed.message || errorText;
-      if (Array.isArray(detail)) detail = detail.join('\n');
-    } catch {}
-    throw new Error(detail);
-  }
-  return res.json();
-};
-
-function App() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -98,14 +148,23 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Form State
+  // Form & Ingestion State
   const [form, setForm] = useState<Partial<Campaign>>({});
   const [jsonInput, setJsonInput] = useState('');
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedFileSize, setUploadedFileSize] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [testEmailAddress, setTestEmailAddress] = useState('');
   const [selectedPreviewRecipientId, setSelectedPreviewRecipientId] = useState<string>('');
   const [previewContent, setPreviewContent] = useState<PreviewData | null>(null);
   const [preflightData, setPreflightData] = useState<PreflightResult | null>(null);
   const [eventCounts, setEventCounts] = useState<Record<string, number>>({});
+  const [profileManagerOpen, setProfileManagerOpen] = useState(false);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [profileForm, setProfileForm] = useState<ProfileDraft>(blankProfile());
+  const [profileBusy, setProfileBusy] = useState(false);
+  const profileFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -144,6 +203,90 @@ function App() {
     }
   };
 
+  const openNewProfile = () => {
+    setEditingProfileId(null);
+    setProfileForm(blankProfile());
+    setProfileManagerOpen(true);
+  };
+
+  const editProfile = (profile: Profile) => {
+    setEditingProfileId(profile.id);
+    setProfileForm(profileToDraft(profile));
+  };
+
+  const handleSaveProfile = async () => {
+    setProfileBusy(true);
+    try {
+      const { password, ...profileValues } = profileForm;
+      const payload = {
+        ...profileValues,
+        name: profileForm.name.trim(),
+        smtp_host: profileForm.smtp_host.trim(),
+        username: profileForm.username?.trim() || null,
+        reply_to: profileForm.reply_to?.trim() || null,
+        list_unsubscribe: profileForm.list_unsubscribe?.trim() || null,
+        imap_host: profileForm.imap_host?.trim() || null,
+        imap_port: profileForm.imap_host ? profileForm.imap_port : null,
+        imap_security: profileForm.imap_host ? profileForm.imap_security : null,
+        password: profileForm.auth_type === 'password' ? password || null : null,
+        access_token: profileForm.auth_type === 'xoauth2' ? password || null : null,
+      };
+      const saved: Profile = await api(editingProfileId ? `/profiles/${editingProfileId}` : '/profiles', {
+        method: editingProfileId ? 'PUT' : 'POST',
+        body: JSON.stringify(payload),
+      });
+      await api('/profile-config', { method: 'PUT' });
+      await loadProfiles();
+      setEditingProfileId(saved.id);
+      setProfileForm(profileToDraft(saved));
+      notify(`Sender profile "${saved.name}" saved to profiles.toml.`);
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const handleLoadProfileFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setProfileBusy(true);
+    try {
+      const content = await file.text();
+      const loaded: Profile[] = await api('/profile-config', {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      });
+      await loadProfiles();
+      if (loaded[0]) editProfile(loaded[0]);
+      notify(`Loaded ${loaded.length} sender profile${loaded.length === 1 ? '' : 's'} from ${file.name}.`);
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setProfileBusy(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleDownloadProfileFile = async () => {
+    setProfileBusy(true);
+    try {
+      const result = await api('/profile-config');
+      const blob = new Blob([result.content], { type: 'application/toml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = result.filename || 'profiles.toml';
+      link.click();
+      URL.revokeObjectURL(url);
+      notify('Downloaded the sender profile TOML file. Credentials are not included.');
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
   const loadSelectedCampaign = async (id: string) => {
     try {
       const camp: Campaign = await api(`/campaigns/${id}`);
@@ -168,10 +311,8 @@ function App() {
   };
 
   useEffect(() => {
-    if (token) {
-      void loadCampaigns();
-      void loadProfiles();
-    }
+    void loadCampaigns();
+    void loadProfiles();
   }, []);
 
   useEffect(() => {
@@ -251,14 +392,87 @@ function App() {
     }
   };
 
+  const handleDeleteCampaign = async (campaignToDelete?: Campaign) => {
+    const target = campaignToDelete || selected;
+    if (!target) return;
+    if (target.state === 'sending') {
+      notify('Cannot delete a campaign while it is actively sending. Please pause or cancel it first.', true);
+      return;
+    }
+    const confirmed = window.confirm(
+      `Are you sure you want to delete campaign "${target.name}"? This action cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await api(`/campaigns/${target.id}`, { method: 'DELETE' });
+      notify(`Campaign "${target.name}" has been deleted.`);
+      const remaining = campaigns.filter((c) => c.id !== target.id);
+      setCampaigns(remaining);
+      if (selectedId === target.id) {
+        setSelectedId(remaining[0]?.id || null);
+        if (remaining.length === 0) {
+          setSelected(null);
+          setRecipients([]);
+        }
+      }
+      await loadCampaigns();
+    } catch (e: any) {
+      notify(e.message, true);
+    }
+  };
+
+  const processFile = async (file: File) => {
+    try {
+      const text = await file.text();
+      setJsonInput(text);
+      setUploadedFileName(file.name);
+      setUploadedFileSize(file.size);
+      notify(`Loaded file "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`);
+    } catch (err: any) {
+      notify(`Failed to read file: ${err.message}`, true);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      void processFile(file);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      void processFile(file);
+    }
+  };
+
   const handleImportJson = async () => {
     if (!selected) return;
     try {
+      const trimmed = jsonInput.trim();
+      if (!trimmed) {
+        throw new Error('Please upload a file or paste JSON/JSONLines recipient data.');
+      }
       let parsed;
       try {
-        parsed = JSON.parse(jsonInput);
+        parsed = JSON.parse(trimmed);
       } catch {
-        throw new Error('Invalid JSON format. Please ensure valid JSON array or object.');
+        // Fallback: parse as JSONLines (NDJSON)
+        const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
+        if (lines.length === 0) {
+          throw new Error('Recipient data is empty.');
+        }
+        parsed = lines.map((line, idx) => {
+          try {
+            return JSON.parse(line);
+          } catch (err: any) {
+            throw new Error(`Syntax error on line ${idx + 1} of JSONLines: ${err.message}`);
+          }
+        });
       }
       const result = await api(`/campaigns/${selected.id}/recipients`, {
         method: 'POST',
@@ -349,6 +563,9 @@ function App() {
   };
 
   const loadSampleJson = () => {
+    setUploadedFileName(null);
+    setUploadedFileSize(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setJsonInput(
       JSON.stringify(
         [
@@ -362,20 +579,23 @@ function App() {
     );
   };
 
-  if (!token) {
-    return (
-      <main>
-        <h1>Local Mail Merge</h1>
-        <p>
-          Please provide a session token via <code>#token=...</code> in the URL.
-        </p>
-      </main>
+  const loadSampleJsonlines = () => {
+    setUploadedFileName(null);
+    setUploadedFileSize(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setJsonInput(
+      [
+        JSON.stringify({ email: 'alex@example.com', first_name: 'Alex', company: 'Acme Corp', role: 'CTO' }),
+        JSON.stringify({ email: 'sarah@example.com', first_name: 'Sarah', company: 'Globex Inc', role: 'VP Engineering' }),
+        JSON.stringify({ email: 'jordan@example.com', first_name: 'Jordan', company: 'Soylent Ltd', role: 'Product Lead' }),
+      ].join('\n')
     );
-  }
+  };
 
   const totalRecipients = recipients.length;
   const sentCount = eventCounts['sent'] || 0;
-  const progressPercent = totalRecipients > 0 ? Math.round((sentCount / totalRecipients) * 100) : 0;
+  const progressPercent =
+    totalRecipients > 0 ? Math.round((sentCount / totalRecipients) * 100) : 0;
 
   return (
     <main>
@@ -384,13 +604,222 @@ function App() {
           <h1>Local Mail Merge</h1>
           <p>Privacy-first bulk email delivery engine</p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <button onClick={handleCreateCampaign}>+ New Campaign</button>
+          <button className="secondary" onClick={openNewProfile}>+ New Profile</button>
+          <UserButton />
         </div>
       </header>
 
       {error && <div className="toast-error">{error}</div>}
       {success && <div className="toast-success">{success}</div>}
+
+      {profileManagerOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setProfileManagerOpen(false)}>
+          <section
+            className="profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profile-manager-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="profile-modal-header">
+              <div>
+                <h2 id="profile-manager-title">Sender profiles</h2>
+                <p>Manage SMTP accounts and their sending guardrails.</p>
+              </div>
+              <button className="icon-button secondary" aria-label="Close profile manager" onClick={() => setProfileManagerOpen(false)}>✕</button>
+            </div>
+
+            {error && <div className="profile-modal-notice error">{error}</div>}
+            {success && <div className="profile-modal-notice success">{success}</div>}
+
+            <div className="profile-toolbar">
+              <button className="secondary" onClick={() => profileFileInputRef.current?.click()} disabled={profileBusy}>
+                ↑ Load TOML
+              </button>
+              <input ref={profileFileInputRef} type="file" accept=".toml,application/toml,text/plain" hidden onChange={handleLoadProfileFile} />
+              <button className="secondary" onClick={handleDownloadProfileFile} disabled={profileBusy || profiles.length === 0}>
+                ↓ Download TOML
+              </button>
+              <span className="profile-toolbar-note">Secrets stay in the OS keychain and are never exported.</span>
+            </div>
+
+            <div className="profile-manager-layout">
+              <nav className="profile-list" aria-label="Sender profiles">
+                <button
+                  className={`profile-list-item ${editingProfileId === null ? 'active' : ''}`}
+                  onClick={() => {
+                    setEditingProfileId(null);
+                    setProfileForm(blankProfile());
+                  }}
+                >
+                  <strong>＋ New profile</strong>
+                  <span>Configure another sender</span>
+                </button>
+                {profiles.map((profile) => (
+                  <button
+                    key={profile.id}
+                    className={`profile-list-item ${editingProfileId === profile.id ? 'active' : ''}`}
+                    onClick={() => editProfile(profile)}
+                  >
+                    <strong>{profile.name}</strong>
+                    <span>{profile.smtp_host}:{profile.smtp_port}</span>
+                  </button>
+                ))}
+              </nav>
+
+              <form
+                className="profile-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleSaveProfile();
+                }}
+              >
+                <div className="profile-form-title">
+                  <div>
+                    <h3>{editingProfileId ? 'Edit sender profile' : 'Create sender profile'}</h3>
+                    <p>{editingProfileId ? 'A blank password keeps the stored credential.' : 'Enter the SMTP details supplied by your email provider.'}</p>
+                  </div>
+                </div>
+
+                <fieldset>
+                  <legend>SMTP connection</legend>
+                  <div className="form-grid compact">
+                    <div className="form-group full">
+                      <label htmlFor="profile-name">Profile name</label>
+                      <input id="profile-name" required value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="Company SMTP" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-smtp-host">SMTP host</label>
+                      <input id="profile-smtp-host" required value={profileForm.smtp_host} onChange={(e) => setProfileForm({ ...profileForm, smtp_host: e.target.value })} placeholder="smtp.example.com" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-smtp-port">Port</label>
+                      <input id="profile-smtp-port" required type="number" min={1} max={65535} value={profileForm.smtp_port} onChange={(e) => setProfileForm({ ...profileForm, smtp_port: Number(e.target.value) })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-security">Security</label>
+                      <select id="profile-security" value={profileForm.security} onChange={(e) => setProfileForm({ ...profileForm, security: e.target.value as ProfileDraft['security'] })}>
+                        <option value="starttls">STARTTLS</option>
+                        <option value="tls">TLS / SSL</option>
+                        <option value="none">None</option>
+                      </select>
+                    </div>
+                    <div className="form-group checkbox-field">
+                      <label><input type="checkbox" checked={profileForm.verify_tls} onChange={(e) => setProfileForm({ ...profileForm, verify_tls: e.target.checked })} /> Verify TLS certificate</label>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-username">Username</label>
+                      <input id="profile-username" value={profileForm.username || ''} onChange={(e) => setProfileForm({ ...profileForm, username: e.target.value })} autoComplete="username" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-auth-type">Authentication</label>
+                      <select id="profile-auth-type" value={profileForm.auth_type} onChange={(e) => setProfileForm({ ...profileForm, auth_type: e.target.value, password: '' })}>
+                        <option value="password">Password / app password</option>
+                        <option value="xoauth2">OAuth 2 access token</option>
+                      </select>
+                    </div>
+                    <div className="form-group full">
+                      <label htmlFor="profile-password">{profileForm.auth_type === 'xoauth2' ? 'Access token' : 'Password or app password'}</label>
+                      <input id="profile-password" type="password" value={profileForm.password} onChange={(e) => setProfileForm({ ...profileForm, password: e.target.value })} autoComplete="new-password" placeholder={editingProfileId ? 'Leave blank to keep current' : 'Stored in OS keychain'} />
+                    </div>
+                  </div>
+                </fieldset>
+
+                <fieldset>
+                  <legend>Defaults and guardrails</legend>
+                  <div className="form-grid compact">
+                    <div className="form-group">
+                      <label htmlFor="profile-reply-to">Default Reply-To</label>
+                      <input id="profile-reply-to" type="email" value={profileForm.reply_to || ''} onChange={(e) => setProfileForm({ ...profileForm, reply_to: e.target.value })} placeholder="replies@example.com" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-daily-cap">Daily cap</label>
+                      <input id="profile-daily-cap" type="number" min={1} value={profileForm.daily_cap} onChange={(e) => setProfileForm({ ...profileForm, daily_cap: Number(e.target.value) })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-delay">Delay between messages (seconds)</label>
+                      <input id="profile-delay" type="number" min={0} value={profileForm.delay_seconds} onChange={(e) => setProfileForm({ ...profileForm, delay_seconds: Number(e.target.value) })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-size">Maximum message size (bytes)</label>
+                      <input id="profile-size" type="number" min={1024} value={profileForm.max_message_bytes} onChange={(e) => setProfileForm({ ...profileForm, max_message_bytes: Number(e.target.value) })} />
+                    </div>
+                    <div className="form-group full">
+                      <label htmlFor="profile-unsubscribe">List-Unsubscribe URL</label>
+                      <input id="profile-unsubscribe" value={profileForm.list_unsubscribe || ''} onChange={(e) => setProfileForm({ ...profileForm, list_unsubscribe: e.target.value })} placeholder="https://unsubscribe.example.com/u/list-token" />
+                    </div>
+                    <div className="form-group full checkbox-field">
+                      <label><input type="checkbox" checked={profileForm.list_unsubscribe_one_click} onChange={(e) => setProfileForm({ ...profileForm, list_unsubscribe_one_click: e.target.checked })} /> Enable RFC 8058 one-click unsubscribe</label>
+                    </div>
+                  </div>
+                </fieldset>
+
+                <details className="advanced-profile-settings">
+                  <summary>Advanced settings</summary>
+                  <div className="form-grid compact">
+                    <div className="form-group">
+                      <label htmlFor="profile-imap-host">IMAP host</label>
+                      <input id="profile-imap-host" value={profileForm.imap_host || ''} onChange={(e) => setProfileForm({ ...profileForm, imap_host: e.target.value })} placeholder="imap.example.com" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-imap-port">IMAP port</label>
+                      <input id="profile-imap-port" type="number" min={1} max={65535} value={profileForm.imap_port ?? ''} onChange={(e) => setProfileForm({ ...profileForm, imap_port: e.target.value ? Number(e.target.value) : null })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-imap-security">IMAP security</label>
+                      <select id="profile-imap-security" value={profileForm.imap_security || ''} onChange={(e) => setProfileForm({ ...profileForm, imap_security: (e.target.value || null) as ProfileDraft['imap_security'] })}>
+                        <option value="">Not configured</option>
+                        <option value="starttls">STARTTLS</option>
+                        <option value="tls">TLS / SSL</option>
+                        <option value="none">None</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-timezone">Working-hours timezone</label>
+                      <input id="profile-timezone" value={profileForm.working_hours_timezone} onChange={(e) => setProfileForm({ ...profileForm, working_hours_timezone: e.target.value })} placeholder="Europe/Berlin" />
+                    </div>
+                    <div className="form-group full checkbox-field">
+                      <label><input type="checkbox" checked={profileForm.working_hours_enabled} onChange={(e) => setProfileForm({ ...profileForm, working_hours_enabled: e.target.checked })} /> Restrict sending to weekdays and working hours</label>
+                    </div>
+                    {profileForm.working_hours_enabled && (
+                      <>
+                        <div className="form-group">
+                          <label htmlFor="profile-start-hour">Start hour</label>
+                          <input id="profile-start-hour" type="number" min={0} max={23} value={profileForm.working_hours_start} onChange={(e) => setProfileForm({ ...profileForm, working_hours_start: Number(e.target.value) })} />
+                        </div>
+                        <div className="form-group">
+                          <label htmlFor="profile-end-hour">End hour</label>
+                          <input id="profile-end-hour" type="number" min={0} max={23} value={profileForm.working_hours_end} onChange={(e) => setProfileForm({ ...profileForm, working_hours_end: Number(e.target.value) })} />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </details>
+
+                <div className="profile-form-actions">
+                  <span>Saving also updates the managed TOML configuration.</span>
+                  {editingProfileId && selected && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setForm({ ...form, profile_id: editingProfileId });
+                        setProfileManagerOpen(false);
+                        notify('Sender profile selected. Save the campaign to keep this selection.');
+                      }}
+                    >
+                      Use in campaign
+                    </button>
+                  )}
+                  <button type="submit" disabled={profileBusy}>{profileBusy ? 'Saving…' : 'Save profile'}</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+      )}
 
       <div className="layout">
         <aside>
@@ -421,7 +850,7 @@ function App() {
                     {selected.state}
                   </span>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   {selected.state === 'draft' && (
                     <button onClick={handleScheduleCampaign}>🚀 Launch Campaign</button>
                   )}
@@ -436,6 +865,16 @@ function App() {
                   {(selected.state === 'sending' || selected.state === 'scheduled') && (
                     <button className="danger" onClick={() => handleControlCampaign('cancel')}>
                       ✕ Cancel
+                    </button>
+                  )}
+                  {selected.state !== 'sending' && (
+                    <button
+                      className="secondary"
+                      style={{ color: '#dc3545', borderColor: '#f5c2c7' }}
+                      title="Delete this campaign"
+                      onClick={() => handleDeleteCampaign(selected)}
+                    >
+                      🗑 Delete
                     </button>
                   )}
                 </div>
@@ -631,30 +1070,122 @@ function App() {
                     </div>
                   </div>
 
-                  <button onClick={handleSaveCampaign}>💾 Save Campaign Configuration</button>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px' }}>
+                    <button onClick={handleSaveCampaign}>💾 Save Campaign Configuration</button>
+                    {selected.state !== 'sending' && (
+                      <button
+                        className="danger"
+                        style={{ padding: '8px 14px' }}
+                        onClick={() => handleDeleteCampaign(selected)}
+                      >
+                        🗑 Delete Campaign
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {/* TAB 2: JSON Recipient Import */}
+              {/* TAB 2: JSON / JSONLines Recipient Import */}
               {activeTab === 'recipients' && (
                 <div>
                   <div className="card">
-                    <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>📥 Batch JSON Recipient Ingestion</h3>
-                    <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
-                      Paste a JSON array of recipients with their custom template variables, or upload a JSON file. All template variables are strictly validated.
+                    <h3 style={{ margin: '0 0 8px', fontSize: '1.05rem' }}>📥 Batch Recipient Ingestion (JSON / JSONLines)</h3>
+                    <p style={{ margin: '0 0 16px', fontSize: '0.85rem', color: '#5e6b62' }}>
+                      Upload a <code>.json</code> or <code>.jsonl</code> / <code>.ndjson</code> file, drag &amp; drop it below, or paste your recipient records directly. All template variables are strictly validated.
                     </p>
-                    <textarea
-                      rows={7}
-                      className="code"
-                      placeholder='[&#10;  {"email": "alice@example.com", "first_name": "Alice", "company": "Acme"},&#10;  {"email": "bob@example.com", "first_name": "Bob", "company": "Globex"}&#10;]'
-                      value={jsonInput}
-                      onChange={(e) => setJsonInput(e.target.value)}
-                    />
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                      <button onClick={handleImportJson}>Import JSON Recipients</button>
+
+                    {/* Drag & Drop Zone */}
+                    <div
+                      className={`dropzone ${isDragging ? 'dropzone-active' : ''}`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setIsDragging(true);
+                      }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        style={{ display: 'none' }}
+                        accept=".json,.jsonl,.ndjson,application/json,application/x-ndjson,text/plain"
+                        onChange={handleFileChange}
+                      />
+                      <div style={{ fontSize: '1.8rem', marginBottom: '6px' }}>📄</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
+                        Click to upload or drag &amp; drop a file
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: '#5e6b62', marginTop: '4px' }}>
+                        Supports <code>.json</code> (array or object) and <code>.jsonl</code> / <code>.ndjson</code> (one JSON object per line)
+                      </div>
+                    </div>
+
+                    {uploadedFileName && (
+                      <div className="file-info-badge">
+                        <span>
+                          📎 <strong>{uploadedFileName}</strong> (
+                          {uploadedFileSize ? (uploadedFileSize / 1024).toFixed(1) : 0} KB)
+                        </span>
+                        <button
+                          className="secondary"
+                          style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUploadedFileName(null);
+                            setUploadedFileSize(null);
+                            setJsonInput('');
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }}
+                        >
+                          Clear File
+                        </button>
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: '14px' }}>
+                      <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <span>Edit / Paste JSON or JSONLines Content:</span>
+                        {jsonInput && (
+                          <span style={{ fontSize: '0.8rem', color: '#5e6b62', fontWeight: 'normal' }}>
+                            {jsonInput.split('\n').filter((l) => l.trim()).length} line(s)
+                          </span>
+                        )}
+                      </label>
+                      <textarea
+                        rows={10}
+                        className="code"
+                        style={{ width: '100%', boxSizing: 'border-box' }}
+                        placeholder={`// Option A: JSON Array\n[\n  {"email": "alice@example.com", "first_name": "Alice", "company": "Acme"},\n  {"email": "bob@example.com", "first_name": "Bob", "company": "Globex"}\n]\n\n// Option B: JSONLines (.jsonl)\n{"email": "alice@example.com", "first_name": "Alice", "company": "Acme"}\n{"email": "bob@example.com", "first_name": "Bob", "company": "Globex"}`}
+                        value={jsonInput}
+                        onChange={(e) => setJsonInput(e.target.value)}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '14px' }}>
+                      <button onClick={handleImportJson}>📥 Import Recipients</button>
+                      <button className="secondary" onClick={() => fileInputRef.current?.click()}>
+                        📁 Choose File
+                      </button>
                       <button className="secondary" onClick={loadSampleJson}>
                         Load Example JSON
                       </button>
+                      <button className="secondary" onClick={loadSampleJsonlines}>
+                        Load Example JSONLines
+                      </button>
+                      {jsonInput && (
+                        <button
+                          className="secondary"
+                          onClick={() => {
+                            setJsonInput('');
+                            setUploadedFileName(null);
+                            setUploadedFileSize(null);
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }}
+                        >
+                          Clear
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -819,6 +1350,56 @@ function App() {
 
       <footer>Local Mail Merge · Privacy-First & Lightweight Email Dispatcher</footer>
     </main>
+  );
+}
+
+function AuthLanding() {
+  return (
+    <div className="auth-container">
+      <div className="auth-card">
+        <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>📬</div>
+        <h1>Local Mail Merge</h1>
+        <p>Sign in to manage your campaigns, templates, and email delivery.</p>
+        <div className="auth-actions">
+          <SignInButton mode="modal">
+            <button style={{ width: '100%', padding: '12px', fontSize: '1rem' }}>
+              Sign In
+            </button>
+          </SignInButton>
+          <SignUpButton mode="modal">
+            <button className="secondary" style={{ width: '100%', padding: '12px', fontSize: '1rem' }}>
+              Create an Account
+            </button>
+          </SignUpButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || '';
+
+function App() {
+  if (!PUBLISHABLE_KEY) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card">
+          <h2>Clerk Configuration Missing</h2>
+          <p>Please ensure <code>VITE_CLERK_PUBLISHABLE_KEY</code> is set in your environment.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ClerkProvider publishableKey={PUBLISHABLE_KEY} afterSignOutUrl="/">
+      <Show when="signed-out">
+        <AuthLanding />
+      </Show>
+      <Show when="signed-in">
+        <Dashboard />
+      </Show>
+    </ClerkProvider>
   );
 }
 

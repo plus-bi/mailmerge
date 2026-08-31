@@ -10,6 +10,8 @@ services:
       UNSUBSCRIBE_DB: /data/events.sqlite3
     volumes:
       - unsubscribe-data:/data
+    ports:
+      - "127.0.0.1:8088:8080"
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
