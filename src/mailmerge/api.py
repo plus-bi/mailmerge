@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import smtplib
+import ssl
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -25,7 +27,7 @@ from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttem
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, validate_template_variables
 from .secrets import get_secret, set_secret
-from .smtp import connect, send
+from .smtp import AuthenticationFailure, connect, send
 from .suppression import sync_suppressions
 
 router = APIRouter(prefix="/api/v1")
@@ -86,6 +88,10 @@ class ProfileOut(ORMModel):
     imap_host: str | None
     imap_port: int | None
     imap_security: str | None
+
+
+class ProfileConnectionTestIn(ProfileIn):
+    profile_id: str | None = None
 
 
 class ProfileFileIn(BaseModel):
@@ -187,6 +193,55 @@ class UnsubscribeConfigOut(BaseModel):
 @router.get("/profiles", response_model=list[ProfileOut])
 def profiles(db: Session = Depends(get_db)):
     return db.scalars(select(Profile).order_by(Profile.name)).all()
+
+
+@router.post("/profiles/test-connection")
+def test_profile_connection(data: ProfileConnectionTestIn, db: Session = Depends(get_db)):
+    values = data.model_dump(exclude={"password", "access_token", "profile_id"})
+    try:
+        validate_profile_entry({"name": data.name, **values})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    password = data.password
+    access_token = data.access_token
+    if data.profile_id:
+        if not db.get(Profile, data.profile_id):
+            raise HTTPException(404, "sender profile not found")
+        password = password or get_secret(data.profile_id, "password")
+        access_token = access_token or get_secret(data.profile_id, "access_token")
+
+    client = None
+    try:
+        client = connect(data, password=password, access_token=access_token)
+        code, _response = client.noop()
+        if code >= 400:
+            raise smtplib.SMTPResponseException(code, b"NOOP rejected")
+    except AuthenticationFailure as exc:
+        raise HTTPException(422, "SMTP authentication failed. Check the username and credential.") from exc
+    except ssl.SSLCertVerificationError as exc:
+        raise HTTPException(502, "SMTP TLS certificate verification failed.") from exc
+    except TimeoutError as exc:
+        raise HTTPException(504, "SMTP connection timed out.") from exc
+    except smtplib.SMTPException as exc:
+        raise HTTPException(502, f"SMTP server rejected the connection: {exc}") from exc
+    except OSError as exc:
+        raise HTTPException(502, f"SMTP connection failed: {exc}") from exc
+    finally:
+        if client is not None:
+            try:
+                client.quit()
+            except Exception:
+                pass
+
+    auth_result = " and authentication" if data.username else ""
+    return {
+        "ok": True,
+        "message": f"SMTP connection{auth_result} succeeded.",
+        "server": data.smtp_host,
+        "port": data.smtp_port,
+        "security": data.security,
+    }
 
 
 @router.post("/profiles", response_model=ProfileOut)

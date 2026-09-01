@@ -207,6 +207,7 @@ function Dashboard() {
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileDraft>(blankProfile());
   const [profileBusy, setProfileBusy] = useState(false);
+  const [profileTesting, setProfileTesting] = useState(false);
   const profileFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -276,24 +277,28 @@ function Dashboard() {
     setProfileForm(profileToDraft(profile));
   };
 
+  const buildProfilePayload = () => {
+    const { password, ...profileValues } = profileForm;
+    return {
+      ...profileValues,
+      name: profileForm.name.trim(),
+      from_name: profileForm.from_name?.trim() || null,
+      from_address: profileForm.from_address?.trim() || null,
+      smtp_host: profileForm.smtp_host.trim(),
+      username: profileForm.username?.trim() || null,
+      reply_to: profileForm.reply_to?.trim() || null,
+      imap_host: profileForm.imap_host?.trim() || null,
+      imap_port: profileForm.imap_host ? profileForm.imap_port : null,
+      imap_security: profileForm.imap_host ? profileForm.imap_security : null,
+      password: profileForm.auth_type === 'password' ? password || null : null,
+      access_token: profileForm.auth_type === 'xoauth2' ? password || null : null,
+    };
+  };
+
   const handleSaveProfile = async () => {
     setProfileBusy(true);
     try {
-      const { password, ...profileValues } = profileForm;
-      const payload = {
-        ...profileValues,
-        name: profileForm.name.trim(),
-        from_name: profileForm.from_name?.trim() || null,
-        from_address: profileForm.from_address?.trim() || null,
-        smtp_host: profileForm.smtp_host.trim(),
-        username: profileForm.username?.trim() || null,
-        reply_to: profileForm.reply_to?.trim() || null,
-        imap_host: profileForm.imap_host?.trim() || null,
-        imap_port: profileForm.imap_host ? profileForm.imap_port : null,
-        imap_security: profileForm.imap_host ? profileForm.imap_security : null,
-        password: profileForm.auth_type === 'password' ? password || null : null,
-        access_token: profileForm.auth_type === 'xoauth2' ? password || null : null,
-      };
+      const payload = buildProfilePayload();
       const saved: Profile = await api(editingProfileId ? `/profiles/${editingProfileId}` : '/profiles', {
         method: editingProfileId ? 'PUT' : 'POST',
         body: JSON.stringify(payload),
@@ -307,6 +312,21 @@ function Dashboard() {
       notify(e.message, true);
     } finally {
       setProfileBusy(false);
+    }
+  };
+
+  const handleTestProfileConnection = async () => {
+    setProfileTesting(true);
+    try {
+      const result = await api('/profiles/test-connection', {
+        method: 'POST',
+        body: JSON.stringify({ ...buildProfilePayload(), profile_id: editingProfileId }),
+      });
+      notify(result.message);
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setProfileTesting(false);
     }
   };
 
@@ -907,7 +927,10 @@ function Dashboard() {
                       Use in campaign
                     </button>
                   )}
-                  <button type="submit" disabled={profileBusy}>{profileBusy ? 'Saving…' : 'Save profile'}</button>
+                  <button type="button" className="secondary" onClick={handleTestProfileConnection} disabled={profileBusy || profileTesting}>
+                    {profileTesting ? 'Testing…' : 'Test connection'}
+                  </button>
+                  <button type="submit" disabled={profileBusy || profileTesting}>{profileBusy ? 'Saving…' : 'Save profile'}</button>
                 </div>
               </form>
             </div>
@@ -1505,6 +1528,20 @@ function Dashboard() {
                     <button className="secondary" onClick={handleSyncSuppressions}>
                       Sync Unsubscribe List Now
                     </button>
+                  </div>
+
+                  <div className="card">
+                    <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>🚀 Launch Campaign</h3>
+                    <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
+                      Runs preflight validation again, then schedules the campaign for immediate delivery.
+                    </p>
+                    {selected.state === 'draft' ? (
+                      <button onClick={handleScheduleCampaign}>🚀 Launch Campaign</button>
+                    ) : (
+                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#5e6b62' }}>
+                        This campaign is currently <strong>{selected.state}</strong>. Duplicate it to start a new campaign from these settings.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}

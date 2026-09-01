@@ -9,12 +9,14 @@ from sqlalchemy.orm import sessionmaker
 
 from mailmerge.api import (
     CampaignIn,
+    ProfileConnectionTestIn,
     TestEmailIn as ApiTestEmailIn,
     campaign_statuses,
     duplicate_campaign,
     preflight,
     router,
     send_test_email,
+    test_profile_connection as run_profile_connection_test,
     update_campaign,
 )
 from mailmerge.config import settings
@@ -294,6 +296,43 @@ daily_cap = 75
     exported = client.get("/api/v1/profile-config")
     assert exported.status_code == 200
     assert exported.json()["filename"] == "profiles.toml"
+
+
+def test_profile_connection_uses_current_settings_and_stored_secret(test_db_session):
+    profile = Profile(
+        name="SMTP connection",
+        smtp_host="smtp.example.com",
+        smtp_port=587,
+        security="starttls",
+        username="sender@example.com",
+    )
+    test_db_session.add(profile)
+    test_db_session.commit()
+    smtp_client = MagicMock()
+    smtp_client.noop.return_value = (250, b"OK")
+
+    with (
+        patch("mailmerge.api.get_secret", side_effect=lambda _id, kind: "stored-password" if kind == "password" else None),
+        patch("mailmerge.api.connect", return_value=smtp_client) as connect_mock,
+    ):
+        result = run_profile_connection_test(
+            ProfileConnectionTestIn(
+                profile_id=profile.id,
+                name=profile.name,
+                smtp_host=profile.smtp_host,
+                smtp_port=profile.smtp_port,
+                security="starttls",
+                username=profile.username,
+            ),
+            test_db_session,
+        )
+
+    assert result["ok"] is True
+    assert result["message"] == "SMTP connection and authentication succeeded."
+    assert result["server"] == "smtp.example.com"
+    assert connect_mock.call_args.kwargs["password"] == "stored-password"
+    smtp_client.noop.assert_called_once_with()
+    smtp_client.quit.assert_called_once_with()
 
 
 
