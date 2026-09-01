@@ -119,7 +119,7 @@ done
 [[ "${api_status}" == "401" ]] || fail "public unauthenticated API check returned HTTP ${api_status}, expected 401"
 
 if [[ -f "${APP_DIR}/deploy/.env" ]] && \
-   ! git diff --quiet "${previous_commit}" HEAD -- deploy/ src/unsubscribe_service pyproject.toml; then
+   ! git -C "${APP_DIR}" diff --quiet "${previous_commit}" HEAD -- deploy/ src/unsubscribe_service pyproject.toml; then
   echo "Containerized services changed; rebuilding the Compose stack..."
   docker compose --project-directory "${APP_DIR}/deploy" up -d --build --remove-orphans
   docker compose --project-directory "${APP_DIR}/deploy" ps
