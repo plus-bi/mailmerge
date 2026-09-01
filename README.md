@@ -11,7 +11,7 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
 - 👁️ **Live Per-Recipient Previews**: Interactive previewer rendering the exact Subject, HTML, and Plain-text message side-by-side with raw JSON values.
 - ✉️ **Send Test Email to Me**: Dispatch instant sample test emails to verify layout and headers in your actual inbox before campaign launch.
 - ⏱️ **Daytime Pacing & Working Hours Guardrails**: Configure inter-message delays (e.g. 144 seconds) and restrict delivery exclusively to business hours (e.g. 09:00–17:00 weekdays in your local timezone).
-- 🛡️ **Automated Unsubscribe Suppression**: Automatic synchronization of RFC 8058 one-click and HMAC-signed unsubscribe requests to the suppression database.
+- 🛡️ **Unsubscribe Suppression Management**: Review RFC 8058 one-click and signed unsubscribe requests, then manually synchronize them into the suppression database from the dashboard.
 - 🔒 **Zero Tracking & Secure Credentials**: No tracking pixels, open beacons, or URL rewrites. Passwords and tokens are stored in the OS Secret Service / Keyring.
 
 ---

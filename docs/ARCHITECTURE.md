@@ -43,7 +43,7 @@ flowchart TD
     Worker -->|Fetch Credentials| Keyring
     Worker -->|Render Messages| Renderer
     Worker -->|Send Messages with Pacing| SMTP
-    Worker -->|Sync Opt-outs| SuppressionSync
+    API -->|Manual Sync Opt-outs| SuppressionSync
 
     SuppressionSync -->|Query Events / Cursor| UnsubService
     Nginx -->|Proxy signed unsubscribe requests| UnsubService
@@ -57,7 +57,7 @@ flowchart TD
 | Module | File Path | Responsibility |
 |---|---|---|
 | **API Router** | [`src/mailmerge/api.py`](file:///home/haris/git/mailclient/src/mailmerge/api.py) | REST API endpoints for campaigns, profiles, JSON recipients, previews, preflight, scheduling, test email dispatch, and SSE events. |
-| **Worker Engine** | [`src/mailmerge/worker.py`](file:///home/haris/git/mailclient/src/mailmerge/worker.py) | Background task loop managing campaign state transitions, working hours guardrails, inter-message pacing, SMTP connection management, retry backoff, and periodic suppression sync. |
+| **Worker Engine** | [`src/mailmerge/worker.py`](file:///home/haris/git/mailclient/src/mailmerge/worker.py) | Background task loop managing campaign state transitions, working hours guardrails, inter-message pacing, SMTP connection management, and retry backoff. |
 | **Template Engine** | [`src/mailmerge/rendering.py`](file:///home/haris/git/mailclient/src/mailmerge/rendering.py) | Jinja2 sandboxed execution with `StrictUndefined`, AST undeclared variable extraction, HTML/Markdown conversion, and custom filters (`lower`, `upper`, `title`, `trim`, `default`, `email`). |
 | **JSON Importer** | [`src/mailmerge/json_import.py`](file:///home/haris/git/mailclient/src/mailmerge/json_import.py) | Parses flat or nested JSON arrays, normalizes/deduplicates emails, extracts keys, and verifies template variable completeness. |
 | **Suppression Sync** | [`src/mailmerge/suppression.py`](file:///home/haris/git/mailclient/src/mailmerge/suppression.py) | Synchronizes unsubscribe events from the unsubscribe microservice (via HTTP API or local SQLite) and marks matching recipients as suppressed. |
@@ -127,7 +127,6 @@ Database management is handled via SQLAlchemy 2.0 with SQLite in WAL mode:
 The worker (`mailmerge.worker.run`) executes in a dedicated process:
 
 1. **Periodic Tick (`worker.tick()`)**:
-   - Queries `SyncCursor` and synchronizes recent unsubscribe events to update `recipient.suppressed = True`.
    - Queries `Campaigns` where `state == CampaignState.scheduled`.
    - Checks if `scheduled_at` is due (or overdue >5 min -> `awaiting_confirmation`).
    - For each due campaign, calls `process_campaign(campaign_id)`.

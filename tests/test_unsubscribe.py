@@ -39,6 +39,9 @@ def test_unsubscribe_is_idempotent_and_cursor_based(tmp_path, monkeypatch):
     for _ in range(2):
         unsubscribed = asyncio.run(service.unsubscribe(token, request()))
         assert "You’re unsubscribed" in unsubscribed
+        assert 'href="https://plus.bi/"' in unsubscribed
+        assert 'src="https://plus.bi/spd_logo.png"' in unsubscribed
+        assert unsubscribed.index('class="home-cta"') < unsubscribed.index("<h1>You’re unsubscribed</h1>")
     response = service.events(cursor=0, authorization="Bearer sync-test-secret")
     assert len(response["events"]) == 1
     cursor = response["cursor"]

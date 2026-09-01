@@ -15,7 +15,6 @@ from .profile_config import load_profiles
 from .rendering import render_message, templates_for_unsubscribe_setting
 from .secrets import get_secret
 from .smtp import AuthenticationFailure, classify_smtp_error, connect, send
-from .suppression import sync_suppressions
 
 RETRY_DELAYS = (60, 300, 900)
 
@@ -181,12 +180,6 @@ def process_campaign(campaign_id: str) -> None:
 def tick() -> None:
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        # Auto-sync suppressions on each worker tick
-        try:
-            sync_suppressions(db)
-        except Exception:
-            pass
-
         campaigns = db.scalars(select(Campaign).where(Campaign.state == CampaignState.scheduled)).all()
         due = []
         for campaign in campaigns:

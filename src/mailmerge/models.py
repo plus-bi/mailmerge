@@ -145,3 +145,12 @@ class SyncCursor(Base):
     name: Mapped[str] = mapped_column(String, primary_key=True)
     cursor: Mapped[str] = mapped_column(String, default="0")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class UnsubscribeEvent(Base):
+    __tablename__ = "unsubscribe_events"
+    source_event_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    campaign: Mapped[str] = mapped_column(String(200), index=True)
+    unsubscribed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

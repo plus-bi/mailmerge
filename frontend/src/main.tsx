@@ -154,6 +154,14 @@ type UnsubscribeConfig = {
   default_base_url: string;
 };
 
+type UnsubscribeEvent = {
+  source_event_id: number;
+  email: string;
+  campaign: string;
+  unsubscribed_at: string;
+  synced_at: string;
+};
+
 function Dashboard() {
   const { getToken } = useAuth();
 
@@ -186,7 +194,9 @@ function Dashboard() {
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [campaignStatuses, setCampaignStatuses] = useState<CampaignStatus[]>([]);
   const [statusLoading, setStatusLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send' | 'status'>('template');
+  const [unsubscribeEvents, setUnsubscribeEvents] = useState<UnsubscribeEvent[]>([]);
+  const [suppressionLoading, setSuppressionLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send' | 'status' | 'unsubscribed'>('template');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [unsubConfig, setUnsubConfig] = useState<UnsubscribeConfig | null>(null);
@@ -247,6 +257,18 @@ function Dashboard() {
       notify(e.message, true);
     } finally {
       setStatusLoading(false);
+    }
+  };
+
+  const loadSuppressions = async () => {
+    setSuppressionLoading(true);
+    try {
+      const data: UnsubscribeEvent[] = await api('/suppressions');
+      setUnsubscribeEvents(data);
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setSuppressionLoading(false);
     }
   };
 
@@ -417,6 +439,10 @@ function Dashboard() {
     void loadCampaignStatuses();
     const timer = window.setInterval(() => void loadCampaignStatuses(), 5000);
     return () => window.clearInterval(timer);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'unsubscribed') void loadSuppressions();
   }, [activeTab]);
 
   const setupSSE = (campaignId: string) => {
@@ -644,13 +670,16 @@ function Dashboard() {
   };
 
   const handleSyncSuppressions = async () => {
-    if (!selected) return;
+    setSuppressionLoading(true);
     try {
-      const res = await api(`/campaigns/${selected.id}/suppression/sync`, { method: 'POST' });
-      notify(`Sync completed: ${res.synced_events} events processed.`);
-      loadRecipients(selected.id);
+      const res = await api('/suppressions/sync', { method: 'POST' });
+      await loadSuppressions();
+      if (selected) await loadRecipients(selected.id);
+      notify(`Sync completed: ${res.synced_events} new event${res.synced_events === 1 ? '' : 's'} processed; ${res.total} total.`);
     } catch (e: any) {
       notify(e.message, true);
+    } finally {
+      setSuppressionLoading(false);
     }
   };
 
@@ -1062,6 +1091,12 @@ function Dashboard() {
                   onClick={() => setActiveTab('status')}
                 >
                   📊 Campaign Status
+                </button>
+                <button
+                  className={`tab-btn ${activeTab === 'unsubscribed' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('unsubscribed')}
+                >
+                  🚫 Unsubscribed ({unsubscribeEvents.length})
                 </button>
               </div>
 
@@ -1537,16 +1572,6 @@ function Dashboard() {
                   </div>
 
                   <div className="card">
-                    <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>🔄 Unsubscribe Suppression Sync</h3>
-                    <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
-                      Synchronize recent opt-out events recorded by the unsubscribe service to update the suppression list.
-                    </p>
-                    <button className="secondary" onClick={handleSyncSuppressions}>
-                      Sync Unsubscribe List Now
-                    </button>
-                  </div>
-
-                  <div className="card">
                     <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>🚀 Launch Campaign</h3>
                     <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
                       Runs preflight validation again, then schedules the campaign for immediate delivery.
@@ -1622,6 +1647,53 @@ function Dashboard() {
                           <tr>
                             <td colSpan={7} style={{ textAlign: 'center', color: '#888' }}>
                               No campaigns have been launched yet.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 6: Unsubscribed addresses */}
+              {activeTab === 'unsubscribed' && (
+                <div>
+                  <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '20px' }}>
+                    <div>
+                      <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem' }}>Unsubscribed Addresses</h3>
+                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#5e6b62' }}>
+                        Synchronization is manual. Click the button to fetch new opt-outs and suppress matching recipients.
+                      </p>
+                    </div>
+                    <button onClick={handleSyncSuppressions} disabled={suppressionLoading} style={{ whiteSpace: 'nowrap' }}>
+                      {suppressionLoading ? 'Synchronizing…' : '↻ Sync Unsubscribe List'}
+                    </button>
+                  </div>
+
+                  <div className="table-wrapper">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Email address</th>
+                          <th>Campaign</th>
+                          <th>Unsubscribed</th>
+                          <th>Synced</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unsubscribeEvents.map((event) => (
+                          <tr key={event.source_event_id}>
+                            <td><strong>{event.email}</strong></td>
+                            <td>{event.campaign || 'Unknown'}</td>
+                            <td>{new Date(event.unsubscribed_at).toLocaleString()}</td>
+                            <td>{new Date(event.synced_at).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                        {!suppressionLoading && unsubscribeEvents.length === 0 && (
+                          <tr>
+                            <td colSpan={4} style={{ textAlign: 'center', color: '#888' }}>
+                              No unsubscribe events have been synchronized yet.
                             </td>
                           </tr>
                         )}

@@ -23,7 +23,7 @@ from .config import settings
 from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
-from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
+from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, UnsubscribeEvent
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
 from .secrets import get_secret, set_secret
@@ -153,6 +153,14 @@ class CampaignStatusOut(BaseModel):
     scheduled_at: datetime
     counts: dict[str, int]
     total: int
+
+
+class UnsubscribeEventOut(ORMModel):
+    source_event_id: int
+    email: str
+    campaign: str
+    unsubscribed_at: datetime
+    synced_at: datetime
 
 
 class RecipientOut(ORMModel):
@@ -656,6 +664,23 @@ def trigger_suppression_sync(campaign_id: str, db: Session = Depends(get_db)):
         select(func.count()).select_from(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.suppressed)
     ) or 0
     return {"ok": True, "synced_events": synced_count, "campaign_suppressed_recipients": suppressed_count}
+
+
+@router.get("/suppressions", response_model=list[UnsubscribeEventOut])
+def list_suppressions(db: Session = Depends(get_db)):
+    return db.scalars(
+        select(UnsubscribeEvent).order_by(UnsubscribeEvent.unsubscribed_at.desc())
+    ).all()
+
+
+@router.post("/suppressions/sync")
+def trigger_global_suppression_sync(db: Session = Depends(get_db)):
+    try:
+        synced_count = sync_suppressions(db)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    total = db.scalar(select(func.count()).select_from(UnsubscribeEvent)) or 0
+    return {"ok": True, "synced_events": synced_count, "total": total}
 
 
 @router.post("/campaigns/{campaign_id}/generate-unsubscribe-token", response_model=GenerateTokenOut)

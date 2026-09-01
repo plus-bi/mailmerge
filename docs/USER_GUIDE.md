@@ -1,6 +1,6 @@
 # Local Mail Merge - User Guide
 
-A privacy-focused, lightweight mail merge service for bulk email delivery. It allows you to send 100–200 personalized emails per day spread smoothly across working hours, validate all template variables beforehand, preview the exact message for any recipient, send sample test emails to yourself, and automatically process unsubscribe requests.
+A privacy-focused, lightweight mail merge service for bulk email delivery. It allows you to send 100–200 personalized emails per day spread smoothly across working hours, validate all template variables beforehand, preview the exact message for any recipient, send sample test emails to yourself, and process unsubscribe requests.
 
 ---
 
@@ -28,7 +28,7 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
 - **Live Per-Recipient Previews**: Interactive preview browser to inspect the rendered HTML and plain-text versions for any recipient alongside their raw JSON values.
 - **Test Email Dispatch**: Send a live test email with prefix `[TEST]` to your inbox with a single click.
 - **Daytime Delivery Pacing & Working Hours Guardrails**: Configure inter-message delays (e.g., 144 seconds) and restrict delivery exclusively to business hours (e.g., Mon–Fri, 09:00–17:00 in your preferred timezone). The background worker automatically pauses outside active hours.
-- **Automated Unsubscribe Suppression**: Integrates with an RFC 8058-compliant unsubscribe microservice and syncs opt-outs into the suppression database.
+- **Unsubscribe Suppression Management**: Integrates with an RFC 8058-compliant unsubscribe microservice and lets an operator review and manually sync opt-outs into the suppression database.
 - **Privacy & Security First**: Credentials are stored in the OS Secret Service / Keyring; no tracking pixels or URL rewrite cookies are injected.
 
 ---
@@ -207,8 +207,8 @@ For marketing and outreach campaigns:
 1. **One-Click Unsubscribe**: Headers compliant with RFC 8058 (`List-Unsubscribe` and `List-Unsubscribe-Post`) are automatically generated.
 2. **Signed Unsubscribe URLs**: Each recipient receives a cryptographically signed HMAC token URL.
 3. **Suppression Sync**:
-   - The worker periodically polls the unsubscribe service and marks unsubscribed recipients as `suppressed = True`.
-   - You can manually trigger a sync at any time via the **"Sync Unsubscribe List Now"** button in the UI.
+   - Open the **Unsubscribed** tab and click **Sync Unsubscribe List**.
+   - Mailmerge stores the email, campaign, unsubscribe time, and sync time, then marks matching recipients as `suppressed = True`.
 
 ---
 

@@ -65,12 +65,24 @@ def connect() -> sqlite3.Connection:
 app = FastAPI(title="Mail Merge Unsubscribe", docs_url=None, redoc_url=None)
 
 
-def render_page(title: str, message: str, *, show_confirm: bool = False) -> str:
+def render_page(
+    title: str,
+    message: str,
+    *,
+    show_confirm: bool = False,
+    show_home_cta: bool = False,
+) -> str:
     action = """
         <form method="post">
           <button type="submit">Confirm unsubscribe</button>
         </form>
     """ if show_confirm else ""
+    home_cta = """
+        <a class="home-cta" href="https://plus.bi/" aria-label="Visit the Plus BI homepage">
+          <img src="https://plus.bi/spd_logo.png" alt="Plus BI">
+          <span>Visit plus.bi</span>
+        </a>
+    """ if show_home_cta else ""
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -84,6 +96,9 @@ def render_page(title: str, message: str, *, show_confirm: bool = False) -> str:
       body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 0%, rgba(0,214,173,.14), transparent 55%), var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }}
       main {{ width: min(100%, 520px); padding: 40px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(145deg, rgba(29,36,52,.96), rgba(20,25,38,.96)); box-shadow: 0 24px 70px rgba(0,0,0,.3); text-align: center; }}
       .brand {{ margin-bottom: 28px; color: var(--primary); font-size: 1.15rem; font-weight: 700; letter-spacing: .04em; }}
+      .home-cta {{ display: inline-flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 0 28px; color: var(--primary); font-weight: 700; text-decoration: none; }}
+      .home-cta img {{ display: block; width: min(220px, 70vw); max-height: 88px; object-fit: contain; }}
+      .home-cta:hover span {{ text-decoration: underline; }}
       h1 {{ margin: 0 0 12px; font-size: clamp(1.75rem, 5vw, 2.35rem); line-height: 1.15; }}
       p {{ margin: 0 auto 28px; max-width: 42ch; color: var(--muted); line-height: 1.65; }}
       button {{ border: 0; border-radius: 10px; padding: 12px 20px; background: var(--primary); color: #08130f; font: inherit; font-weight: 700; cursor: pointer; }}
@@ -94,6 +109,7 @@ def render_page(title: str, message: str, *, show_confirm: bool = False) -> str:
   <body>
     <main>
       <div class="brand">PLUS BI</div>
+      {home_cta}
       <h1>{title}</h1>
       <p>{message}</p>
       {action}
@@ -143,6 +159,7 @@ async def unsubscribe(token: str, request: Request):
     return render_page(
         "You’re unsubscribed",
         "Your preference has been saved. You will no longer receive emails from this campaign.",
+        show_home_cta=True,
     )
 
 

@@ -169,7 +169,7 @@ CLERK_PUBLISHABLE_KEY=pk_live_replace_me
 # Optional when it cannot be derived from the publishable key:
 # CLERK_JWKS_URL=https://your-clerk-domain/.well-known/jwks.json
 
-MAILMERGE_UNSUBSCRIBE_SYNC_URL=https://unsub.yourdomain.com/api/v1/events
+MAILMERGE_UNSUBSCRIBE_SYNC_URL=http://127.0.0.1:8088/api/v1/events
 ```
 
 Replace `YOUR_USER` with the Linux account that runs both services. Do not set `MAILMERGE_SESSION_TOKEN`; it is obsolete. Do not place the Clerk secret key in a frontend or `VITE_*` environment variable.
@@ -285,8 +285,10 @@ UNSUBSCRIBE_SIGNING_SECRET=${SIGNING_SECRET}
 UNSUBSCRIBE_SYNC_SECRET=${SYNC_SECRET}
 EOF
 
-# Give the worker the same synchronization secret.
-printf '\nMAILMERGE_UNSUBSCRIBE_SYNC_SECRET=%s\n' "$SYNC_SECRET" >> /opt/mailmerge/.env
+# Give Mailmerge the same synchronization secret and the loopback URL used by
+# the manual Sync Unsubscribe List button.
+printf '\nMAILMERGE_UNSUBSCRIBE_SYNC_URL=http://127.0.0.1:8088/api/v1/events\n' >> /opt/mailmerge/.env
+printf 'MAILMERGE_UNSUBSCRIBE_SYNC_SECRET=%s\n' "$SYNC_SECRET" >> /opt/mailmerge/.env
 
 docker compose up -d
 systemctl --user restart mailmerge.service mailmerge-worker.service
