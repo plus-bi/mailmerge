@@ -65,6 +65,43 @@ def connect() -> sqlite3.Connection:
 app = FastAPI(title="Mail Merge Unsubscribe", docs_url=None, redoc_url=None)
 
 
+def render_page(title: str, message: str, *, show_confirm: bool = False) -> str:
+    action = """
+        <form method="post">
+          <button type="submit">Confirm unsubscribe</button>
+        </form>
+    """ if show_confirm else ""
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>{title} · Plus BI</title>
+    <style>
+      :root {{ color-scheme: dark; --bg: #111522; --card: #181e2c; --border: #2b3346; --text: #f1f5f9; --muted: #8f9aad; --primary: #00d6ad; }}
+      * {{ box-sizing: border-box; }}
+      body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 0%, rgba(0,214,173,.14), transparent 55%), var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }}
+      main {{ width: min(100%, 520px); padding: 40px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(145deg, rgba(29,36,52,.96), rgba(20,25,38,.96)); box-shadow: 0 24px 70px rgba(0,0,0,.3); text-align: center; }}
+      .brand {{ margin-bottom: 28px; color: var(--primary); font-size: 1.15rem; font-weight: 700; letter-spacing: .04em; }}
+      h1 {{ margin: 0 0 12px; font-size: clamp(1.75rem, 5vw, 2.35rem); line-height: 1.15; }}
+      p {{ margin: 0 auto 28px; max-width: 42ch; color: var(--muted); line-height: 1.65; }}
+      button {{ border: 0; border-radius: 10px; padding: 12px 20px; background: var(--primary); color: #08130f; font: inherit; font-weight: 700; cursor: pointer; }}
+      button:hover {{ filter: brightness(1.08); }}
+      a {{ color: var(--primary); }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">PLUS BI</div>
+      <h1>{title}</h1>
+      <p>{message}</p>
+      {action}
+    </main>
+  </body>
+</html>"""
+
+
 @app.get("/health")
 def health():
     return {"ok": bool(SIGNING_SECRET and SYNC_SECRET)}
@@ -72,14 +109,29 @@ def health():
 
 @app.get("/u/{token}", response_class=HTMLResponse)
 def confirmation(token: str):
-    verify_token(token)
-    return """<!doctype html><html><body><h1>Unsubscribe</h1>
-    <form method="post"><button type="submit">Confirm unsubscribe</button></form></body></html>"""
+    try:
+        verify_token(token)
+    except HTTPException:
+        return HTMLResponse(
+            render_page("Link unavailable", "This unsubscribe link is invalid or incomplete."),
+            status_code=404,
+        )
+    return render_page(
+        "Unsubscribe from emails",
+        "Confirm that you no longer want to receive emails from this sender.",
+        show_confirm=True,
+    )
 
 
 @app.post("/u/{token}", response_class=HTMLResponse)
 async def unsubscribe(token: str, request: Request):
-    data = verify_token(token)
+    try:
+        data = verify_token(token)
+    except HTTPException:
+        return HTMLResponse(
+            render_page("Link unavailable", "This unsubscribe link is invalid or incomplete."),
+            status_code=404,
+        )
     content_type = request.headers.get("content-type", "")
     if "application/x-www-form-urlencoded" in content_type:
         body = (await request.body()).decode(errors="replace")
@@ -88,7 +140,10 @@ async def unsubscribe(token: str, request: Request):
     with connect() as db:
         db.execute("INSERT OR IGNORE INTO events(campaign_id, recipient_id, created_at) VALUES (?, ?, ?)",
                    (data["c"], data["r"], int(time.time())))
-    return "<!doctype html><html><body><h1>You are unsubscribed.</h1></body></html>"
+    return render_page(
+        "You’re unsubscribed",
+        "Your preference has been saved. You will no longer receive emails from this campaign.",
+    )
 
 
 @app.get("/api/v1/events")
@@ -104,4 +159,3 @@ def run() -> None:
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8080)
-

@@ -70,7 +70,7 @@ If `git status --short` reports local changes, stop and reconcile them before pu
 
 The copy step is required because the deployed service prefers the frontend build under `MAILMERGE_DATA_DIR` over `/opt/mailmerge/frontend/dist`.
 
-If files under `deploy/` changed, rebuild the unsubscribe stack too:
+If Compose configuration, Python dependencies, or unsubscribe-service source changed, rebuild the containerized services too:
 
 ```bash
 cd /opt/mailmerge/deploy
@@ -83,8 +83,8 @@ docker compose ps
 From the VM:
 
 ```bash
-curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/
-curl -i http://127.0.0.1:8765/api/v1/profiles
+curl -fsS -o /dev/null -w '%{http_code}\n' https://mailmerge.plus.bi/
+curl -i https://mailmerge.plus.bi/api/v1/profiles
 journalctl --user -u mailmerge.service -u mailmerge-worker.service -n 100 --no-pager
 ```
 

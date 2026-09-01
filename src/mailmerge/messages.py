@@ -32,7 +32,9 @@ def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMe
         or (profile and getattr(profile, "list_unsubscribe", None))
     )
     if include_unsubscribe:
-        raw_base = campaign.unsubscribe_base_url or (profile.list_unsubscribe if profile else None) or "https://mailmerge.plus.bi"
+        raw_base = campaign.unsubscribe_base_url or (profile.list_unsubscribe if profile else None) or "https://unsub.plus.bi"
+        if raw_base.rstrip("/") == "https://mailmerge.plus.bi":
+            raw_base = "https://unsub.plus.bi"
         unsubscribe = raw_base
         if raw_base.startswith("http") and "/u/" not in raw_base:
             secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""

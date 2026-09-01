@@ -12,21 +12,5 @@ services:
       - unsubscribe-data:/data
     ports:
       - "127.0.0.1:8088:8080"
-  caddy:
-    image: caddy:2.8-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:?required}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on: [unsubscribe]
 volumes:
   unsubscribe-data:
-  caddy-data:
-  caddy-config:
-

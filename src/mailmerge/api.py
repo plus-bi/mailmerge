@@ -115,7 +115,11 @@ class CampaignIn(BaseModel):
     working_hours_timezone: str = "UTC"
     consent_acknowledged: bool = False
     list_unsubscribe_enabled: bool = False
-    unsubscribe_base_url: str | None = "https://mailmerge.plus.bi"
+    unsubscribe_base_url: str | None = "https://unsub.plus.bi"
+
+
+class DuplicateCampaignIn(BaseModel):
+    name: str | None = None
 
 
 class CampaignOut(ORMModel):
@@ -406,10 +410,17 @@ def update_campaign(campaign_id: str, data: CampaignIn, db: Session = Depends(ge
 
 
 @router.post("/campaigns/{campaign_id}/duplicate", response_model=CampaignOut)
-def duplicate_campaign(campaign_id: str, db: Session = Depends(get_db)):
+def duplicate_campaign(
+    campaign_id: str,
+    data: DuplicateCampaignIn | None = None,
+    db: Session = Depends(get_db),
+):
     source = _campaign(db, campaign_id)
     settings_copy = {field: getattr(source, field) for field in CampaignIn.model_fields}
-    settings_copy["name"] = f"{source.name} (copy)"
+    requested_name = data.name.strip() if data and data.name else ""
+    settings_copy["name"] = requested_name or f"{source.name} (copy)"
+    if settings_copy["unsubscribe_base_url"] in {None, "https://mailmerge.plus.bi"}:
+        settings_copy["unsubscribe_base_url"] = "https://unsub.plus.bi"
     duplicate = Campaign(**settings_copy)
     db.add(duplicate)
     db.commit()
@@ -516,7 +527,9 @@ def _recipient_unsubscribe_url(campaign: Campaign, recipient_email: str) -> str 
         return None
     from unsubscribe_service.main import sign_token
 
-    raw_base = campaign.unsubscribe_base_url or "https://mailmerge.plus.bi"
+    raw_base = campaign.unsubscribe_base_url or "https://unsub.plus.bi"
+    if raw_base.rstrip("/") == "https://mailmerge.plus.bi":
+        raw_base = "https://unsub.plus.bi"
     if "/u/" in raw_base:
         raw_base = raw_base.split("/u/", 1)[0]
     token = sign_token(campaign.name, recipient_email, secret=secret)
@@ -653,7 +666,9 @@ def generate_campaign_token(
     recipient_id = data.recipient_id.strip() if data.recipient_id else "all"
     token = sign_token(campaign.name, recipient_id, secret=secret)
 
-    raw_base = (data.base_url or campaign.unsubscribe_base_url or "https://mailmerge.plus.bi").strip()
+    raw_base = (data.base_url or campaign.unsubscribe_base_url or "https://unsub.plus.bi").strip()
+    if raw_base.rstrip("/") == "https://mailmerge.plus.bi":
+        raw_base = "https://unsub.plus.bi"
     if "/u/" in raw_base:
         raw_base = raw_base.split("/u/")[0]
     raw_base = raw_base.rstrip("/")
@@ -671,7 +686,7 @@ def generate_campaign_token(
 def get_unsubscribe_config():
     secret_configured = bool(os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or os.getenv("MAILMERGE_UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret)
     domain = os.getenv("DOMAIN") or os.getenv("MAILMERGE_DOMAIN") or settings.domain
-    default_base = "https://mailmerge.plus.bi"
+    default_base = "https://unsub.plus.bi"
 
     return UnsubscribeConfigOut(
         signing_secret_configured=secret_configured,

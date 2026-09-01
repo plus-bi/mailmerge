@@ -401,6 +401,7 @@ function Dashboard() {
 
   useEffect(() => {
     if (selectedId) {
+      setEventCounts({});
       void loadSelectedCampaign(selectedId);
       setupSSE(selectedId);
     }
@@ -427,6 +428,16 @@ function Dashboard() {
       try {
         const payload = JSON.parse(event.data);
         if (payload.counts) setEventCounts(payload.counts);
+        if (payload.state) {
+          setSelected((current) => current?.id === campaignId ? { ...current, state: payload.state } : current);
+          setCampaigns((current) => current.map((campaign) =>
+            campaign.id === campaignId ? { ...campaign, state: payload.state } : campaign
+          ));
+          if (['completed', 'cancelled', 'failed'].includes(payload.state)) {
+            es.close();
+            void loadCampaignStatuses();
+          }
+        }
       } catch {}
     };
     eventSourceRef.current = es;
@@ -517,8 +528,13 @@ function Dashboard() {
 
   const handleDuplicateCampaign = async () => {
     if (!selected) return;
+    const duplicateName = window.prompt('Name for the duplicated campaign:', `${selected.name} (copy)`);
+    if (!duplicateName?.trim()) return;
     try {
-      const duplicate: Campaign = await api(`/campaigns/${selected.id}/duplicate`, { method: 'POST' });
+      const duplicate: Campaign = await api(`/campaigns/${selected.id}/duplicate`, {
+        method: 'POST',
+        body: JSON.stringify({ name: duplicateName.trim() }),
+      });
       await loadCampaigns();
       setSelectedId(duplicate.id);
       setActiveTab('template');
@@ -1180,7 +1196,7 @@ function Dashboard() {
                       )}
                     </div>
                     <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
-                      Base URL is fixed to <code>https://mailmerge.plus.bi</code>. When enabled, the backend dynamically generates an HMAC-SHA256 signature for each recipient using campaign <em>"{selected.name}"</em> and injects <code>List-Unsubscribe</code> &amp; <code>List-Unsubscribe-Post</code> headers.
+                      Base URL is fixed to <code>https://unsub.plus.bi</code>. When enabled, the backend dynamically generates an HMAC-SHA256 signature for each recipient using campaign <em>"{selected.name}"</em> and injects <code>List-Unsubscribe</code> &amp; <code>List-Unsubscribe-Post</code> headers.
                     </p>
                     <div className="form-group full checkbox-field" style={{ margin: 0 }}>
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>

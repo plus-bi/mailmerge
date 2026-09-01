@@ -81,10 +81,9 @@ def test_list_unsubscribe_checkbox_dynamic_token(monkeypatch):
     assert "List-Unsubscribe-Post" in msg
     assert msg["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
     header = msg["List-Unsubscribe"].strip("<>")
-    assert header.startswith("https://mailmerge.plus.bi/u/")
+    assert header.startswith("https://unsub.plus.bi/u/")
     token = header.split("/u/")[1]
     from unsubscribe_service.main import verify_token
     payload = verify_token(token, secret="super-secret-key")
     assert payload["c"] == "Autumn Newsletter"
     assert payload["r"] == "reader@example.com"
-

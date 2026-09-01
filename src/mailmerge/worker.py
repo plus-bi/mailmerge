@@ -102,7 +102,9 @@ def process_campaign(campaign_id: str) -> None:
                         if secret:
                             from unsubscribe_service.main import sign_token
                             token = sign_token(campaign.name, recipient.email, secret=secret)
-                            raw_base = campaign.unsubscribe_base_url or "https://mailmerge.plus.bi"
+                            raw_base = campaign.unsubscribe_base_url or "https://unsub.plus.bi"
+                            if raw_base.rstrip("/") == "https://mailmerge.plus.bi":
+                                raw_base = "https://unsub.plus.bi"
                             if "/u/" in raw_base:
                                 raw_base = raw_base.split("/u/", 1)[0]
                             values.setdefault("unsubscribe_url", f"{raw_base.rstrip('/')}/u/{token}")

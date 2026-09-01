@@ -4,6 +4,7 @@ set -Eeuo pipefail
 readonly APP_DIR="/opt/mailmerge"
 readonly RUNTIME_ENV="${APP_DIR}/.env"
 readonly FRONTEND_ENV="${APP_DIR}/frontend/.env.production.local"
+readonly PUBLIC_URL="https://mailmerge.plus.bi"
 readonly DEPLOY_REF="${1:-}"
 readonly SERVICES=(mailmerge.service mailmerge-worker.service)
 
@@ -66,12 +67,20 @@ cp -a dist/. "${frontend_target}/"
 
 echo "Restarting services..."
 systemctl --user daemon-reload
+declare -A previous_pids
+for service in "${SERVICES[@]}"; do
+  previous_pids["${service}"]="$(systemctl --user show "${service}" --property=MainPID --value 2>/dev/null || true)"
+done
 systemctl --user restart --no-block "${SERVICES[@]}"
 
 for service in "${SERVICES[@]}"; do
-  for _attempt in {1..30}; do
+  for _attempt in {1..120}; do
     state="$(systemctl --user is-active "${service}" 2>/dev/null || true)"
-    [[ "${state}" == "active" || "${state}" == "failed" ]] && break
+    current_pid="$(systemctl --user show "${service}" --property=MainPID --value 2>/dev/null || true)"
+    if [[ "${state}" == "active" && "${current_pid}" != "0" && "${current_pid}" != "${previous_pids[${service}]}" ]]; then
+      break
+    fi
+    [[ "${state}" == "failed" ]] && break
     sleep 1
   done
 done
@@ -86,14 +95,21 @@ if [[ "${status_code}" -ne 0 ]]; then
   exit 1
 fi
 
-ui_status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/ || true)"
-[[ "${ui_status}" == "200" ]] || fail "UI health check returned HTTP ${ui_status}"
-api_status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/api/v1/profiles || true)"
-[[ "${api_status}" == "401" ]] || fail "unauthenticated API check returned HTTP ${api_status}, expected 401"
+ui_status="000"
+api_status="000"
+for _attempt in {1..30}; do
+  ui_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "${PUBLIC_URL}/" || true)"
+  api_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "${PUBLIC_URL}/api/v1/profiles" || true)"
+  [[ "${ui_status}" == "200" && "${api_status}" == "401" ]] && break
+  sleep 2
+done
+[[ "${ui_status}" == "200" ]] || fail "public UI health check returned HTTP ${ui_status}"
+[[ "${api_status}" == "401" ]] || fail "public unauthenticated API check returned HTTP ${api_status}, expected 401"
 
-if [[ -f "${APP_DIR}/deploy/.env" ]] && ! git diff --quiet "${previous_commit}" HEAD -- deploy/; then
-  echo "Deployment files changed; rebuilding the unsubscribe stack..."
-  docker compose --project-directory "${APP_DIR}/deploy" up -d --build
+if [[ -f "${APP_DIR}/deploy/.env" ]] && \
+   ! git diff --quiet "${previous_commit}" HEAD -- deploy/ src/unsubscribe_service pyproject.toml; then
+  echo "Containerized services changed; rebuilding the Compose stack..."
+  docker compose --project-directory "${APP_DIR}/deploy" up -d --build --remove-orphans
   docker compose --project-directory "${APP_DIR}/deploy" ps
 fi
 

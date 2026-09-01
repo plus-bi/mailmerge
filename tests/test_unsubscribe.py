@@ -1,6 +1,7 @@
+import asyncio
 import importlib
 
-from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 def load_service(tmp_path, monkeypatch):
@@ -11,23 +12,34 @@ def load_service(tmp_path, monkeypatch):
     return importlib.reload(service)
 
 
+def request() -> Request:
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": []}, receive)
+
+
 def test_token_tampering_is_rejected(tmp_path, monkeypatch):
     service = load_service(tmp_path, monkeypatch)
     token = service.sign_token("campaign-id", "recipient-id")
     assert service.verify_token(token)["r"] == "recipient-id"
-    client = TestClient(service.app)
-    assert client.get("/u/" + token + "x").status_code == 404
+    response = service.confirmation(token + "x")
+    assert response.status_code == 404
+    body = response.body.decode()
+    assert "Link unavailable" in body
+    assert "PLUS BI" in body
 
 
 def test_unsubscribe_is_idempotent_and_cursor_based(tmp_path, monkeypatch):
     service = load_service(tmp_path, monkeypatch)
     token = service.sign_token("campaign-id", "recipient-id")
-    client = TestClient(service.app)
+    confirmation = service.confirmation(token)
+    assert "Confirm unsubscribe" in confirmation
+    assert "PLUS BI" in confirmation
     for _ in range(2):
-        assert client.post("/u/" + token).status_code == 200
-    response = client.get("/api/v1/events?cursor=0", headers={"Authorization": "Bearer sync-test-secret"})
-    assert response.status_code == 200
-    assert len(response.json()["events"]) == 1
-    cursor = response.json()["cursor"]
-    assert client.get(f"/api/v1/events?cursor={cursor}", headers={"Authorization": "Bearer sync-test-secret"}).json()["events"] == []
-
+        unsubscribed = asyncio.run(service.unsubscribe(token, request()))
+        assert "You’re unsubscribed" in unsubscribed
+    response = service.events(cursor=0, authorization="Bearer sync-test-secret")
+    assert len(response["events"]) == 1
+    cursor = response["cursor"]
+    assert service.events(cursor=cursor, authorization="Bearer sync-test-secret")["events"] == []

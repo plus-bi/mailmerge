@@ -24,7 +24,8 @@ flowchart TD
 
     subgraph Unsubscribe Infrastructure
         UnsubService["Unsubscribe Microservice (FastAPI + SQLite)"]
-        Caddy["Caddy Reverse Proxy (HTTPS / Let's Encrypt)"]
+        UnsubDB[(Unsubscribe Event DB)]
+        Nginx["Nginx Reverse Proxy (HTTPS / Let's Encrypt)"]
     end
 
     subgraph External Email Delivery
@@ -45,7 +46,8 @@ flowchart TD
     Worker -->|Sync Opt-outs| SuppressionSync
 
     SuppressionSync -->|Query Events / Cursor| UnsubService
-    UnsubService -->|Record RFC 8058 Opt-outs| Caddy
+    Nginx -->|Proxy signed unsubscribe requests| UnsubService
+    UnsubService -->|Record RFC 8058 opt-outs| UnsubDB
 ```
 
 ---

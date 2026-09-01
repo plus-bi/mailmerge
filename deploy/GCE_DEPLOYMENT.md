@@ -1,6 +1,6 @@
 # Deploying Local Mail Merge on Google Compute Engine
 
-This guide deploys the application and worker as systemd user services on a Google Compute Engine VM. The dashboard remains private behind an IAP or SSH tunnel and uses Clerk for user authentication. Only the unsubscribe endpoint is publicly exposed through Caddy.
+This guide deploys the application and worker as systemd user services on a Google Compute Engine VM. Nginx terminates public HTTPS for the authenticated dashboard and the unsubscribe endpoint.
 
 ---
 
@@ -16,7 +16,7 @@ flowchart TD
     subgraph GCP ["Google Cloud Platform (VPC)"]
         subgraph GCE ["Compute Engine VM (Debian / Ubuntu)"]
             subgraph Public ["Public Ingress (Ports 80 / 443)"]
-                Caddy["Caddy Reverse Proxy"]
+                Nginx["Nginx Reverse Proxy"]
                 Unsub["Unsubscribe Service (Docker :8000)"]
             end
 
@@ -37,7 +37,8 @@ flowchart TD
     Admin -->|IAP Tunnel (Port 8765)| IAP --> API
     Admin -->|Sign in| Clerk
     API -->|Verify JWT via JWKS| Clerk
-    Recipient -->|HTTPS Unsubscribe Link| Caddy --> Unsub
+    Recipient -->|HTTPS Unsubscribe Link| Nginx --> Unsub
+    Admin -->|HTTPS| Nginx --> API
     Unsub -->|Sync Unsubscribes| DB
     API --> DB
     API --> Keyring
@@ -60,7 +61,7 @@ flowchart TD
 
 ### 3.1. Create Firewall Rules
 
-Allow public HTTP/HTTPS traffic (for the unsubscribe handler and Caddy TLS verification) while keeping the application port (8765) private:
+Allow public HTTP/HTTPS traffic for nginx and keep the application ports bound to localhost:
 
 ```bash
 # Allow HTTP/HTTPS for unsubscribe handling & automatic SSL
@@ -268,7 +269,7 @@ systemctl --user enable --now mailmerge-worker.service
 
 ---
 
-## 7. Unsubscribe Microservice & Caddy Setup
+## 7. Unsubscribe Microservice & Nginx Setup
 
 Configure the public-facing signed unsubscribe service:
 
@@ -280,7 +281,6 @@ SIGNING_SECRET=$(openssl rand -hex 32)
 SYNC_SECRET=$(openssl rand -hex 32)
 
 cat <<EOF > .env
-DOMAIN=unsub.yourdomain.com
 UNSUBSCRIBE_SIGNING_SECRET=${SIGNING_SECRET}
 UNSUBSCRIBE_SYNC_SECRET=${SYNC_SECRET}
 EOF
@@ -292,7 +292,15 @@ docker compose up -d
 systemctl --user restart mailmerge.service mailmerge-worker.service
 ```
 
-Create an `A` record for the configured unsubscribe hostname pointing to the VM's reserved external IP. Confirm that Caddy has obtained a certificate before using the unsubscribe URL in a campaign.
+Install `packaging/unsub.plus.bi.nginx` as an enabled nginx site, create the DNS `A` record, and issue the certificate:
+
+```bash
+sudo install -m 0644 /opt/mailmerge/packaging/unsub.plus.bi.nginx /etc/nginx/sites-available/unsub.plus.bi
+sudo ln -s /etc/nginx/sites-available/unsub.plus.bi /etc/nginx/sites-enabled/unsub.plus.bi
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot --nginx -d unsub.plus.bi --redirect
+```
 
 ---
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from mailmerge.api import (
     CampaignIn,
+    DuplicateCampaignIn,
     ProfileConnectionTestIn,
     TestEmailIn as ApiTestEmailIn,
     campaign_statuses,
@@ -199,7 +200,7 @@ def test_duplicate_campaign_copies_settings_into_clean_draft(test_db_session):
         body_template="Body {{ unsubscribe_url }}",
         consent_acknowledged=True,
         list_unsubscribe_enabled=True,
-        unsubscribe_base_url="https://mailmerge.plus.bi",
+        unsubscribe_base_url="https://unsub.plus.bi",
     )
     test_db_session.add(source)
     test_db_session.flush()
@@ -212,10 +213,14 @@ def test_duplicate_campaign_copies_settings_into_clean_draft(test_db_session):
     )
     test_db_session.commit()
 
-    duplicate = duplicate_campaign(source.id, test_db_session)
+    duplicate = duplicate_campaign(
+        source.id,
+        DuplicateCampaignIn(name="Follow-up campaign"),
+        test_db_session,
+    )
 
     assert duplicate.id != source.id
-    assert duplicate.name == "Original (copy)"
+    assert duplicate.name == "Follow-up campaign"
     assert duplicate.state == CampaignState.draft
     assert duplicate.scheduled_at is None
     assert duplicate.purpose == source.purpose
@@ -236,7 +241,7 @@ def test_send_test_email_injects_unsubscribe_url(test_db_session, monkeypatch):
         subject_template="Hello {{ first_name }}",
         body_template="Hi {{ first_name }}. Unsubscribe: {{ unsubscribe_url }}",
         list_unsubscribe_enabled=True,
-        unsubscribe_base_url="https://mailmerge.plus.bi",
+        unsubscribe_base_url="https://unsub.plus.bi",
     )
     test_db_session.add(campaign)
     test_db_session.flush()
@@ -265,7 +270,7 @@ def test_send_test_email_injects_unsubscribe_url(test_db_session, monkeypatch):
 
     assert result["ok"] is True
     plain_body = sent_messages[0].get_body(preferencelist=("plain",)).get_content()
-    assert "https://mailmerge.plus.bi/u/" in plain_body
+    assert "https://unsub.plus.bi/u/" in plain_body
 
 
 def test_profile_manager_import_edit_and_save_toml(client, tmp_path, monkeypatch):
@@ -447,7 +452,7 @@ def test_get_unsubscribe_config(client, monkeypatch):
     data = res.json()
     assert data["signing_secret_configured"] is True
     assert data["domain"] == "mail.example.com"
-    assert data["default_base_url"] == "https://mailmerge.plus.bi"
+    assert data["default_base_url"] == "https://unsub.plus.bi"
 
 
 def test_suppression_sync_with_email_recipient_id(test_db_session, tmp_path, monkeypatch):

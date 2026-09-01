@@ -74,7 +74,7 @@ class Campaign(Base):
     consent_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     suppression_synced: Mapped[bool] = mapped_column(Boolean, default=False)
     list_unsubscribe_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    unsubscribe_base_url: Mapped[str | None] = mapped_column(String(500), default="https://mailmerge.plus.bi")
+    unsubscribe_base_url: Mapped[str | None] = mapped_column(String(500), default="https://unsub.plus.bi")
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     guardrail_override: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

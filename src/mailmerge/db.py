@@ -52,3 +52,11 @@ def init_db() -> None:
             except Exception:
                 pass
 
+        conn.execute(
+            text(
+                "UPDATE campaigns SET unsubscribe_base_url = :new_url "
+                "WHERE unsubscribe_base_url IS NULL OR unsubscribe_base_url = :old_url"
+            ),
+            {"new_url": "https://unsub.plus.bi", "old_url": "https://mailmerge.plus.bi"},
+        )
+        conn.commit()
