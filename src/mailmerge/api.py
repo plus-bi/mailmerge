@@ -23,7 +23,7 @@ from .config import settings
 from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
-from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, UnsubscribeEvent
+from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
 from .secrets import get_secret, set_secret
@@ -160,7 +160,11 @@ class UnsubscribeEventOut(ORMModel):
     email: str
     campaign: str
     unsubscribed_at: datetime
-    synced_at: datetime
+
+
+class SuppressionListOut(BaseModel):
+    events: list[UnsubscribeEventOut]
+    last_synced_at: datetime | None
 
 
 class RecipientOut(ORMModel):
@@ -666,11 +670,13 @@ def trigger_suppression_sync(campaign_id: str, db: Session = Depends(get_db)):
     return {"ok": True, "synced_events": synced_count, "campaign_suppressed_recipients": suppressed_count}
 
 
-@router.get("/suppressions", response_model=list[UnsubscribeEventOut])
+@router.get("/suppressions", response_model=SuppressionListOut)
 def list_suppressions(db: Session = Depends(get_db)):
-    return db.scalars(
+    events = db.scalars(
         select(UnsubscribeEvent).order_by(UnsubscribeEvent.unsubscribed_at.desc())
     ).all()
+    cursor = db.get(SyncCursor, "unsubscribe_service")
+    return {"events": events, "last_synced_at": cursor.updated_at if cursor else None}
 
 
 @router.post("/suppressions/sync")

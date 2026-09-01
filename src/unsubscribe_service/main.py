@@ -95,7 +95,6 @@ def render_page(
       * {{ box-sizing: border-box; }}
       body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 0%, rgba(0,214,173,.14), transparent 55%), var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }}
       main {{ width: min(100%, 520px); padding: 40px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(145deg, rgba(29,36,52,.96), rgba(20,25,38,.96)); box-shadow: 0 24px 70px rgba(0,0,0,.3); text-align: center; }}
-      .brand {{ margin-bottom: 28px; color: var(--primary); font-size: 1.15rem; font-weight: 700; letter-spacing: .04em; }}
       .home-cta {{ display: inline-flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 0 28px; color: var(--primary); font-weight: 700; text-decoration: none; }}
       .home-cta img {{ display: block; width: min(220px, 70vw); max-height: 88px; object-fit: contain; }}
       .home-cta:hover span {{ text-decoration: underline; }}
@@ -108,7 +107,6 @@ def render_page(
   </head>
   <body>
     <main>
-      <div class="brand">PLUS BI</div>
       {home_cta}
       <h1>{title}</h1>
       <p>{message}</p>
@@ -136,6 +134,7 @@ def confirmation(token: str):
         "Unsubscribe from emails",
         "Confirm that you no longer want to receive emails from this sender.",
         show_confirm=True,
+        show_home_cta=True,
     )
 
 

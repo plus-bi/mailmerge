@@ -159,7 +159,11 @@ type UnsubscribeEvent = {
   email: string;
   campaign: string;
   unsubscribed_at: string;
-  synced_at: string;
+};
+
+type SuppressionList = {
+  events: UnsubscribeEvent[];
+  last_synced_at: string | null;
 };
 
 function Dashboard() {
@@ -195,6 +199,7 @@ function Dashboard() {
   const [campaignStatuses, setCampaignStatuses] = useState<CampaignStatus[]>([]);
   const [statusLoading, setStatusLoading] = useState(false);
   const [unsubscribeEvents, setUnsubscribeEvents] = useState<UnsubscribeEvent[]>([]);
+  const [lastSuppressionSync, setLastSuppressionSync] = useState<string | null>(null);
   const [suppressionLoading, setSuppressionLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send' | 'status' | 'unsubscribed'>('template');
   const [error, setError] = useState<string | null>(null);
@@ -263,8 +268,9 @@ function Dashboard() {
   const loadSuppressions = async () => {
     setSuppressionLoading(true);
     try {
-      const data: UnsubscribeEvent[] = await api('/suppressions');
-      setUnsubscribeEvents(data);
+      const data: SuppressionList = await api('/suppressions');
+      setUnsubscribeEvents(data.events);
+      setLastSuppressionSync(data.last_synced_at);
     } catch (e: any) {
       notify(e.message, true);
     } finally {
@@ -1666,9 +1672,14 @@ function Dashboard() {
                         Synchronization is manual. Click the button to fetch new opt-outs and suppress matching recipients.
                       </p>
                     </div>
-                    <button onClick={handleSyncSuppressions} disabled={suppressionLoading} style={{ whiteSpace: 'nowrap' }}>
-                      {suppressionLoading ? 'Synchronizing…' : '↻ Sync Unsubscribe List'}
-                    </button>
+                    <div style={{ textAlign: 'right' }}>
+                      <button onClick={handleSyncSuppressions} disabled={suppressionLoading} style={{ whiteSpace: 'nowrap' }}>
+                        {suppressionLoading ? 'Synchronizing…' : '↻ Sync Unsubscribe List'}
+                      </button>
+                      <div style={{ marginTop: '7px', fontSize: '0.78rem', color: '#5e6b62' }}>
+                        Last synced: {lastSuppressionSync ? new Date(lastSuppressionSync).toLocaleString() : 'Never'}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="table-wrapper">
@@ -1678,7 +1689,6 @@ function Dashboard() {
                           <th>Email address</th>
                           <th>Campaign</th>
                           <th>Unsubscribed</th>
-                          <th>Synced</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1687,12 +1697,11 @@ function Dashboard() {
                             <td><strong>{event.email}</strong></td>
                             <td>{event.campaign || 'Unknown'}</td>
                             <td>{new Date(event.unsubscribed_at).toLocaleString()}</td>
-                            <td>{new Date(event.synced_at).toLocaleString()}</td>
                           </tr>
                         ))}
                         {!suppressionLoading && unsubscribeEvents.length === 0 && (
                           <tr>
-                            <td colSpan={4} style={{ textAlign: 'center', color: '#888' }}>
+                            <td colSpan={3} style={{ textAlign: 'center', color: '#888' }}>
                               No unsubscribe events have been synchronized yet.
                             </td>
                           </tr>

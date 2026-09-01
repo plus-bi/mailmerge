@@ -256,7 +256,7 @@ Renders a sample message and dispatches a test email immediately to the specifie
 ## 7. Unsubscribe Suppression Sync
 
 ### `GET /suppressions`
-Lists unsubscribe events already synchronized into the Mailmerge database, newest first. Each item includes `email`, `campaign`, `unsubscribed_at`, and `synced_at`.
+Lists unsubscribe events already synchronized into the Mailmerge database, newest first. The response includes `email`, `campaign`, and `unsubscribed_at` for each event, plus the most recent manual synchronization time in `last_synced_at`.
 
 ### `POST /suppressions/sync`
 Manually fetches new unsubscribe events from the configured unsubscribe service, stores their metadata, and marks matching recipients as suppressed across campaigns.

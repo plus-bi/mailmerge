@@ -208,7 +208,7 @@ For marketing and outreach campaigns:
 2. **Signed Unsubscribe URLs**: Each recipient receives a cryptographically signed HMAC token URL.
 3. **Suppression Sync**:
    - Open the **Unsubscribed** tab and click **Sync Unsubscribe List**.
-   - Mailmerge stores the email, campaign, unsubscribe time, and sync time, then marks matching recipients as `suppressed = True`.
+   - Mailmerge lists the email, campaign, and unsubscribe time, shows the most recent sync time beneath the button, and marks matching recipients as `suppressed = True`.
 
 ---
 

@@ -489,12 +489,14 @@ def test_suppression_sync_from_sqlite_db(test_db_session, tmp_path, monkeypatch)
     assert recipient.suppressed is True
     assert recipient2.suppressed is True
     assert campaign.suppression_synced is True
-    events = list_suppressions(test_db_session)
+    suppression_list = list_suppressions(test_db_session)
+    events = suppression_list["events"]
     assert len(events) == 1
     assert events[0].source_event_id == 1
     assert events[0].email == "unsub@example.com"
     assert events[0].campaign == "c1"
     assert events[0].unsubscribed_at == datetime.fromtimestamp(1700000000, timezone.utc).replace(tzinfo=None)
+    assert suppression_list["last_synced_at"] is not None
 
     result = trigger_global_suppression_sync(test_db_session)
     assert result == {"ok": True, "synced_events": 0, "total": 1}

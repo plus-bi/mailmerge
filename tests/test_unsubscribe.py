@@ -27,7 +27,6 @@ def test_token_tampering_is_rejected(tmp_path, monkeypatch):
     assert response.status_code == 404
     body = response.body.decode()
     assert "Link unavailable" in body
-    assert "PLUS BI" in body
 
 
 def test_unsubscribe_is_idempotent_and_cursor_based(tmp_path, monkeypatch):
@@ -35,7 +34,9 @@ def test_unsubscribe_is_idempotent_and_cursor_based(tmp_path, monkeypatch):
     token = service.sign_token("campaign-id", "recipient-id")
     confirmation = service.confirmation(token)
     assert "Confirm unsubscribe" in confirmation
-    assert "PLUS BI" in confirmation
+    assert 'href="https://plus.bi/"' in confirmation
+    assert 'src="https://plus.bi/spd_logo.png"' in confirmation
+    assert confirmation.index('class="home-cta"') < confirmation.index("<h1>Unsubscribe from emails</h1>")
     for _ in range(2):
         unsubscribed = asyncio.run(service.unsubscribe(token, request()))
         assert "You’re unsubscribed" in unsubscribed
