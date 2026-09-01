@@ -25,12 +25,7 @@ def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMe
         message["Reply-To"] = reply_to
 
     # List-Unsubscribe Header
-    include_unsubscribe = bool(
-        campaign.list_unsubscribe_enabled
-        or (profile and getattr(profile, "list_unsubscribe_one_click", False))
-        or (campaign.purpose == "marketing")
-        or (profile and getattr(profile, "list_unsubscribe", None))
-    )
+    include_unsubscribe = campaign.list_unsubscribe_enabled
     if include_unsubscribe:
         raw_base = campaign.unsubscribe_base_url or (profile.list_unsubscribe if profile else None) or "https://unsub.plus.bi"
         if raw_base.rstrip("/") == "https://mailmerge.plus.bi":

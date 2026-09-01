@@ -26,7 +26,8 @@ if [[ -n "$(git status --porcelain)" ]]; then
   fail "the deployment checkout has local changes; reconcile them before updating"
 fi
 
-previous_commit="$(git rev-parse HEAD)"
+checkout_commit="$(git rev-parse HEAD)"
+previous_commit="${MAILMERGE_UPDATE_FROM_COMMIT:-${checkout_commit}}"
 git fetch --prune origin
 
 if [[ -n "${DEPLOY_REF}" ]]; then
@@ -40,6 +41,17 @@ else
   current_branch="$(git symbolic-ref --quiet --short HEAD)" || \
     fail "the checkout is detached; pass the commit or ref to deploy"
   git pull --ff-only origin "${current_branch}"
+fi
+
+if [[ "${MAILMERGE_UPDATE_REEXECUTED:-0}" != "1" ]] && \
+   ! git diff --quiet "${previous_commit}" HEAD -- deploy/update.sh; then
+  echo "The updater changed; restarting with the newly pulled version..."
+  export MAILMERGE_UPDATE_FROM_COMMIT="${previous_commit}"
+  export MAILMERGE_UPDATE_REEXECUTED=1
+  if [[ -n "${DEPLOY_REF}" ]]; then
+    exec "${APP_DIR}/deploy/update.sh" "${DEPLOY_REF}"
+  fi
+  exec "${APP_DIR}/deploy/update.sh"
 fi
 
 echo "Updating Python dependencies..."

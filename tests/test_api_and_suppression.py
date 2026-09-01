@@ -15,6 +15,7 @@ from mailmerge.api import (
     campaign_statuses,
     duplicate_campaign,
     preflight,
+    preview_recipient,
     router,
     send_test_email,
     test_profile_connection as run_profile_connection_test,
@@ -271,6 +272,75 @@ def test_send_test_email_injects_unsubscribe_url(test_db_session, monkeypatch):
     assert result["ok"] is True
     plain_body = sent_messages[0].get_body(preferencelist=("plain",)).get_content()
     assert "https://unsub.plus.bi/u/" in plain_body
+
+
+def test_preview_suppresses_unsubscribe_line_when_disabled(test_db_session):
+    campaign = Campaign(
+        name="No unsubscribe preview",
+        purpose="operational",
+        from_address="sender@example.com",
+        subject_template="Hello {{ first_name }}",
+        body_template=(
+            "Hi {{ first_name }}.\n\n"
+            "If you prefer not to receive these emails, you can "
+            "[unsubscribe here]({{ unsubscribe_url }}).\n\nRegards"
+        ),
+        body_mode="markdown",
+        list_unsubscribe_enabled=False,
+    )
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    recipient = Recipient(
+        campaign_id=campaign.id,
+        email="reader@example.com",
+        normalized_email="reader@example.com",
+        values={"first_name": "Reader"},
+    )
+    test_db_session.add(recipient)
+    test_db_session.commit()
+
+    preview = preview_recipient(campaign.id, recipient.id, test_db_session)
+
+    assert "unsubscribe_url" not in preview["text"]
+    assert "If you prefer" not in preview["text"]
+    assert "Hi Reader." in preview["text"]
+    assert "Regards" in preview["text"]
+
+
+def test_send_test_email_suppresses_unsubscribe_line_when_disabled(test_db_session):
+    profile = Profile(name="Test SMTP", smtp_host="localhost", smtp_port=1025, security="none")
+    test_db_session.add(profile)
+    test_db_session.flush()
+    campaign = Campaign(
+        name="No unsubscribe test email",
+        profile_id=profile.id,
+        from_address="sender@example.com",
+        subject_template="Hello",
+        body_template="Body\n\nUnsubscribe: {{ unsubscribe_url }}\n\nRegards",
+        list_unsubscribe_enabled=False,
+    )
+    test_db_session.add(campaign)
+    test_db_session.commit()
+    smtp_client = MagicMock()
+    sent_messages = []
+
+    with (
+        patch("mailmerge.api.get_secret", return_value=None),
+        patch("mailmerge.api.connect", return_value=smtp_client),
+        patch("mailmerge.api.send", lambda _client, message: sent_messages.append(message)),
+    ):
+        result = send_test_email(
+            campaign.id,
+            ApiTestEmailIn(recipient_email="tester@example.com"),
+            test_db_session,
+        )
+
+    assert result["ok"] is True
+    message = sent_messages[0]
+    assert "unsubscribe_url" not in message.get_body(preferencelist=("plain",)).get_content()
+    assert "Unsubscribe:" not in message.get_body(preferencelist=("plain",)).get_content()
+    assert "Regards" in message.get_body(preferencelist=("plain",)).get_content()
+    assert "List-Unsubscribe" not in message
 
 
 def test_profile_manager_import_edit_and_save_toml(client, tmp_path, monkeypatch):

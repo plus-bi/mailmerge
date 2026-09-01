@@ -25,7 +25,7 @@ from .json_import import parse_recipients_json
 from .messages import build_message
 from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
-from .rendering import get_required_variables, render_message, validate_template_variables
+from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
 from .secrets import get_secret, set_secret
 from .smtp import AuthenticationFailure, connect, send
 from .suppression import sync_suppressions
@@ -543,30 +543,35 @@ def preflight(campaign: Campaign, db: Session) -> dict:
         errors.append("sender profile is required")
     profile = db.get(Profile, campaign.profile_id) if campaign.profile_id else None
     recipients = db.scalars(select(Recipient).where(Recipient.campaign_id == campaign.id)).all()
+    subject_template, body_template = templates_for_unsubscribe_setting(
+        campaign.subject_template,
+        campaign.body_template,
+        campaign.list_unsubscribe_enabled,
+    )
 
     for recipient in recipients:
         if not recipient.included or not recipient.valid or recipient.suppressed:
             continue
         values = dict(recipient.values)
         values.setdefault("email", recipient.email)
-        if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+        if campaign.list_unsubscribe_enabled:
             unsubscribe_url = _recipient_unsubscribe_url(campaign, recipient.email)
             if unsubscribe_url:
                 values.setdefault("unsubscribe_url", unsubscribe_url)
 
         # Validate that all required template variables are populated
-        missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
+        missing_vars = validate_template_variables(subject_template, body_template, values)
         if missing_vars:
             errors.append(f"{recipient.email}: missing required template variable(s): {', '.join(missing_vars)}")
             continue
 
         try:
-            rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
+            rendered = render_message(subject_template, body_template, campaign.body_mode, values)
             message = build_message(campaign, recipient.email, rendered, profile)
             size = len(message.as_bytes())
             if profile and size > profile.max_message_bytes:
                 raise ValueError(f"estimated message size {size} exceeds profile limit")
-            if campaign.purpose == "marketing" and "unsubscribe_url" not in values and "unsubscribe_url" not in campaign.body_template:
+            if campaign.list_unsubscribe_enabled and "unsubscribe_url" not in values and "unsubscribe_url" not in body_template:
                 raise ValueError("marketing message must visibly include unsubscribe_url")
             previews.append(
                 {
@@ -616,13 +621,18 @@ def preview_recipient(campaign_id: str, recipient_id: str, db: Session = Depends
         raise HTTPException(404, "recipient not found in this campaign")
     values = dict(recipient.values)
     values.setdefault("email", recipient.email)
-    if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+    subject_template, body_template = templates_for_unsubscribe_setting(
+        campaign.subject_template,
+        campaign.body_template,
+        campaign.list_unsubscribe_enabled,
+    )
+    if campaign.list_unsubscribe_enabled:
         unsubscribe_url = _recipient_unsubscribe_url(campaign, recipient.email)
         if unsubscribe_url:
             values.setdefault("unsubscribe_url", unsubscribe_url)
-    missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
+    missing_vars = validate_template_variables(subject_template, body_template, values)
     try:
-        rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
+        rendered = render_message(subject_template, body_template, campaign.body_mode, values)
         return {
             "recipient_id": recipient.id,
             "email": recipient.email,
@@ -714,19 +724,24 @@ def send_test_email(campaign_id: str, data: TestEmailIn, db: Session = Depends(g
 
     values = dict(sample_recipient.values) if sample_recipient else {}
     values.setdefault("email", data.recipient_email)
-    if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+    subject_template, body_template = templates_for_unsubscribe_setting(
+        campaign.subject_template,
+        campaign.body_template,
+        campaign.list_unsubscribe_enabled,
+    )
+    if campaign.list_unsubscribe_enabled:
         unsubscribe_url = _recipient_unsubscribe_url(campaign, data.recipient_email)
         if unsubscribe_url:
             values.setdefault("unsubscribe_url", unsubscribe_url)
-        elif "unsubscribe_url" in get_required_variables(campaign.subject_template, campaign.body_template):
+        elif "unsubscribe_url" in get_required_variables(subject_template, body_template):
             raise HTTPException(422, "Unsubscribe signing secret is not configured")
 
-    missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
+    missing_vars = validate_template_variables(subject_template, body_template, values)
     if missing_vars:
         raise HTTPException(422, f"Missing required template variable(s): {', '.join(missing_vars)}")
 
     try:
-        rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
+        rendered = render_message(subject_template, body_template, campaign.body_mode, values)
         # Prefix subject with [TEST]
         test_rendered = type(rendered)(
             subject=f"[TEST] {rendered.subject}",

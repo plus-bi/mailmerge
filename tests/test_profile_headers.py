@@ -10,6 +10,7 @@ def test_profile_reply_to_and_unsubscribe_headers():
     )
     campaign = Campaign(
         name="Test", from_name="Sender", from_address="sender@example.com", purpose="operational",
+        list_unsubscribe_enabled=True,
     )
     message = build_message(campaign, "recipient@example.com", RenderedMessage("Test", "<p>Body</p>", "Body"), profile)
     assert message["Reply-To"] == "replies@example.com"
@@ -36,6 +37,7 @@ def test_campaign_unsubscribe_overrides_profile():
         from_name="Sender",
         from_address="sender@example.com",
         unsubscribe_base_url="https://unsub.example.com/u/campaign-token",
+        list_unsubscribe_enabled=True,
     )
     message = build_message(campaign, "recipient@example.com", RenderedMessage("Test", "Body", "Body"), profile)
     assert message["List-Unsubscribe"] == "<https://unsub.example.com/u/campaign-token>"
@@ -87,3 +89,29 @@ def test_list_unsubscribe_checkbox_dynamic_token(monkeypatch):
     payload = verify_token(token, secret="super-secret-key")
     assert payload["c"] == "Autumn Newsletter"
     assert payload["r"] == "reader@example.com"
+
+
+def test_disabled_unsubscribe_checkbox_omits_headers_even_with_profile_default():
+    profile = Profile(
+        name="TUM",
+        smtp_host="postout.lrz.de",
+        list_unsubscribe="https://unsubscribe.example.com/u/token",
+        list_unsubscribe_one_click=True,
+    )
+    campaign = Campaign(
+        name="Test",
+        from_name="Sender",
+        from_address="sender@example.com",
+        purpose="marketing",
+        list_unsubscribe_enabled=False,
+    )
+
+    message = build_message(
+        campaign,
+        "recipient@example.com",
+        RenderedMessage("Test", "<p>Body</p>", "Body"),
+        profile,
+    )
+
+    assert "List-Unsubscribe" not in message
+    assert "List-Unsubscribe-Post" not in message

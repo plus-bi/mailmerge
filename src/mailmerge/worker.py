@@ -12,7 +12,7 @@ from .db import SessionLocal, init_db
 from .messages import build_message
 from .models import AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
 from .profile_config import load_profiles
-from .rendering import render_message
+from .rendering import render_message, templates_for_unsubscribe_setting
 from .secrets import get_secret
 from .smtp import AuthenticationFailure, classify_smtp_error, connect, send
 from .suppression import sync_suppressions
@@ -97,7 +97,12 @@ def process_campaign(campaign_id: str) -> None:
                 try:
                     values = dict(recipient.values)
                     values.setdefault("email", recipient.email)
-                    if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+                    subject_template, body_template = templates_for_unsubscribe_setting(
+                        campaign.subject_template,
+                        campaign.body_template,
+                        campaign.list_unsubscribe_enabled,
+                    )
+                    if campaign.list_unsubscribe_enabled:
                         secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
                         if secret:
                             from unsubscribe_service.main import sign_token
@@ -108,7 +113,7 @@ def process_campaign(campaign_id: str) -> None:
                             if "/u/" in raw_base:
                                 raw_base = raw_base.split("/u/", 1)[0]
                             values.setdefault("unsubscribe_url", f"{raw_base.rstrip('/')}/u/{token}")
-                    rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
+                    rendered = render_message(subject_template, body_template, campaign.body_mode, values)
                     message = build_message(campaign, recipient.email, rendered, profile)
                     send(client, message)
                     recipient.status = "sent"

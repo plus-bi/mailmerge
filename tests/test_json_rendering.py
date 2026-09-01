@@ -7,6 +7,7 @@ from mailmerge.rendering import (
     extract_variables,
     get_required_variables,
     render_message,
+    templates_for_unsubscribe_setting,
     valid_email,
     validate_template_variables,
 )
@@ -95,6 +96,26 @@ def test_render_markdown_and_plain_text():
 def test_missing_variable_in_strict_undefined_raises():
     with pytest.raises(UndefinedError):
         render_message("Hi {{ missing }}", "Body", "markdown", {})
+
+
+def test_disabled_unsubscribe_removes_entire_template_lines():
+    subject, body = templates_for_unsubscribe_setting(
+        "Newsletter",
+        "Hello\n\nIf you prefer not to receive these emails, you can [unsubscribe here]({{ unsubscribe_url }}).\n\nRegards\n",
+        enabled=False,
+    )
+
+    assert subject == "Newsletter"
+    assert "unsubscribe_url" not in body
+    assert "If you prefer" not in body
+    assert "Hello" in body
+    assert "Regards" in body
+    assert render_message(subject, body, "markdown", {}).subject == "Newsletter"
+
+
+def test_enabled_unsubscribe_preserves_templates():
+    templates = ("Newsletter", "Unsubscribe: {{ unsubscribe_url }}")
+    assert templates_for_unsubscribe_setting(*templates, enabled=True) == templates
 
 
 def test_working_hours_guardrail():

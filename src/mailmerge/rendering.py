@@ -68,6 +68,23 @@ def validate_template_variables(subject_template: str, body_template: str, value
     return missing
 
 
+def templates_for_unsubscribe_setting(
+    subject_template: str,
+    body_template: str,
+    enabled: bool,
+) -> tuple[str, str]:
+    if enabled:
+        return subject_template, body_template
+
+    def without_unsubscribe_lines(template: str) -> str:
+        return "".join(
+            line for line in template.splitlines(keepends=True)
+            if "unsubscribe_url" not in line
+        )
+
+    return without_unsubscribe_lines(subject_template), without_unsubscribe_lines(body_template)
+
+
 def html_to_text(html: str) -> str:
     if BeautifulSoup:
         soup = BeautifulSoup(html, "html.parser")
