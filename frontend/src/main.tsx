@@ -110,6 +110,15 @@ type Campaign = {
   scheduled_at: string | null;
 };
 
+type CampaignStatus = {
+  id: string;
+  name: string;
+  state: string;
+  scheduled_at: string;
+  counts: Record<string, number>;
+  total: number;
+};
+
 type Recipient = {
   id: string;
   email: string;
@@ -175,7 +184,9 @@ function Dashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Campaign | null>(null);
   const [recipients, setRecipients] = useState<Recipient[]>([]);
-  const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send'>('template');
+  const [campaignStatuses, setCampaignStatuses] = useState<CampaignStatus[]>([]);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send' | 'status'>('template');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [unsubConfig, setUnsubConfig] = useState<UnsubscribeConfig | null>(null);
@@ -223,6 +234,18 @@ function Dashboard() {
       }
     } catch (e: any) {
       notify(e.message, true);
+    }
+  };
+
+  const loadCampaignStatuses = async () => {
+    setStatusLoading(true);
+    try {
+      const data: CampaignStatus[] = await api('/campaigns/status');
+      setCampaignStatuses(data);
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setStatusLoading(false);
     }
   };
 
@@ -368,6 +391,13 @@ function Dashboard() {
     };
   }, [selectedId]);
 
+  useEffect(() => {
+    if (activeTab !== 'status') return;
+    void loadCampaignStatuses();
+    const timer = window.setInterval(() => void loadCampaignStatuses(), 5000);
+    return () => window.clearInterval(timer);
+  }, [activeTab]);
+
   const setupSSE = (campaignId: string) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -401,7 +431,7 @@ function Dashboard() {
           name,
           profile_id: profiles[0]?.id || null,
           subject_template: 'Hello {{ first_name }}',
-          body_template: 'Hi {{ first_name }},\n\nWe are excited to reach out!\n\nBest,\nTeam',
+          body_template: 'Hi {{ first_name }},\n\nWe are excited to reach out!\n\nIf you prefer not to receive these emails, you can [unsubscribe here]({{ unsubscribe_url }}).\n\nBest,\nTeam',
           body_mode: 'markdown',
           working_hours_enabled: false,
           working_hours_start: 9,
@@ -460,6 +490,19 @@ function Dashboard() {
         }
       }
       await loadCampaigns();
+    } catch (e: any) {
+      notify(e.message, true);
+    }
+  };
+
+  const handleDuplicateCampaign = async () => {
+    if (!selected) return;
+    try {
+      const duplicate: Campaign = await api(`/campaigns/${selected.id}/duplicate`, { method: 'POST' });
+      await loadCampaigns();
+      setSelectedId(duplicate.id);
+      setActiveTab('template');
+      notify(`Created draft campaign "${duplicate.name}".`);
     } catch (e: any) {
       notify(e.message, true);
     }
@@ -588,6 +631,7 @@ function Dashboard() {
       notify('Campaign scheduled and launched!');
       loadSelectedCampaign(selected.id);
       loadCampaigns();
+      loadCampaignStatuses();
     } catch (e: any) {
       notify(e.message, true);
     }
@@ -917,6 +961,9 @@ function Dashboard() {
                       ✕ Cancel
                     </button>
                   )}
+                  <button className="secondary" onClick={handleDuplicateCampaign}>
+                    ⧉ Duplicate
+                  </button>
                   {selected.state !== 'sending' && (
                     <button
                       className="secondary"
@@ -970,6 +1017,12 @@ function Dashboard() {
                   onClick={() => setActiveTab('send')}
                 >
                   🚀 Preflight & Send
+                </button>
+                <button
+                  className={`tab-btn ${activeTab === 'status' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('status')}
+                >
+                  📊 Campaign Status
                 </button>
               </div>
 
@@ -1275,9 +1328,6 @@ function Dashboard() {
 
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '14px' }}>
                       <button onClick={handleImportJson}>📥 Import Recipients</button>
-                      <button className="secondary" onClick={() => fileInputRef.current?.click()}>
-                        📁 Choose File
-                      </button>
                       <button className="secondary" onClick={loadSampleJson}>
                         Load Example JSON
                       </button>
@@ -1366,7 +1416,13 @@ function Dashboard() {
                       <div>
                         <h4>Recipient Values</h4>
                         <pre style={{ background: '#f4f6f3', padding: '12px', borderRadius: '6px', fontSize: '0.85rem' }}>
-                          {JSON.stringify(previewContent.values, null, 2)}
+                          {JSON.stringify(
+                            Object.fromEntries(
+                              Object.entries(previewContent.values).filter(([key]) => key !== 'unsubscribe_url')
+                            ),
+                            null,
+                            2
+                          )}
                         </pre>
                         {previewContent.missing_variables && previewContent.missing_variables.length > 0 && (
                           <div className="toast-error">
@@ -1449,6 +1505,75 @@ function Dashboard() {
                     <button className="secondary" onClick={handleSyncSuppressions}>
                       Sync Unsubscribe List Now
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 5: Launched campaign status */}
+              {activeTab === 'status' && (
+                <div>
+                  <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem' }}>Launched Campaigns</h3>
+                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#5e6b62' }}>
+                        Delivery status refreshes automatically every five seconds.
+                      </p>
+                    </div>
+                    <button className="secondary" onClick={loadCampaignStatuses} disabled={statusLoading}>
+                      {statusLoading ? 'Refreshing…' : '↻ Refresh'}
+                    </button>
+                  </div>
+
+                  <div className="table-wrapper">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Campaign</th>
+                          <th>Launched</th>
+                          <th>State</th>
+                          <th>Progress</th>
+                          <th>Sent</th>
+                          <th>Failed</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {campaignStatuses.map((campaign) => {
+                          const sent = campaign.counts.sent || 0;
+                          const failed = campaign.counts.failed || 0;
+                          const processed = sent + failed;
+                          return (
+                            <tr key={campaign.id}>
+                              <td><strong>{campaign.name}</strong></td>
+                              <td>{new Date(campaign.scheduled_at).toLocaleString()}</td>
+                              <td><span className={`badge badge-${campaign.state}`}>{campaign.state}</span></td>
+                              <td>{processed} / {campaign.total}</td>
+                              <td>{sent}</td>
+                              <td>{failed}</td>
+                              <td>
+                                <button
+                                  className="secondary"
+                                  style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                                  onClick={() => {
+                                    setSelectedId(campaign.id);
+                                    setActiveTab('recipients');
+                                  }}
+                                >
+                                  View
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!statusLoading && campaignStatuses.length === 0 && (
+                          <tr>
+                            <td colSpan={7} style={{ textAlign: 'center', color: '#888' }}>
+                              No campaigns have been launched yet.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}

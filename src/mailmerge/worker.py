@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .config import settings
 from .db import SessionLocal, init_db
@@ -97,11 +98,14 @@ def process_campaign(campaign_id: str) -> None:
                     values = dict(recipient.values)
                     values.setdefault("email", recipient.email)
                     if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
-                        secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or ""
+                        secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
                         if secret:
                             from unsubscribe_service.main import sign_token
                             token = sign_token(campaign.name, recipient.email, secret=secret)
-                            values.setdefault("unsubscribe_url", f"https://mailmerge.plus.bi/u/{token}")
+                            raw_base = campaign.unsubscribe_base_url or "https://mailmerge.plus.bi"
+                            if "/u/" in raw_base:
+                                raw_base = raw_base.split("/u/", 1)[0]
+                            values.setdefault("unsubscribe_url", f"{raw_base.rstrip('/')}/u/{token}")
                     rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
                     message = build_message(campaign, recipient.email, rendered, profile)
                     send(client, message)
@@ -136,11 +140,34 @@ def process_campaign(campaign_id: str) -> None:
             except Exception:
                 pass
         pending = db.scalar(
-            select(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.status.in_(["pending", "retry"])).limit(1)
+            select(Recipient).where(
+                Recipient.campaign_id == campaign.id,
+                Recipient.included,
+                Recipient.valid,
+                ~Recipient.suppressed,
+                Recipient.status.in_(["pending", "retry"]),
+            ).limit(1)
         )
         if campaign.state == CampaignState.sending and not pending:
-            campaign.state = CampaignState.completed
-            db.add(AuditLog(campaign_id=campaign.id, action="completed"))
+            failed_count = db.scalar(
+                select(func.count())
+                .select_from(Recipient)
+                .where(
+                    Recipient.campaign_id == campaign.id,
+                    Recipient.included,
+                    Recipient.valid,
+                    ~Recipient.suppressed,
+                    Recipient.status == "failed",
+                )
+            ) or 0
+            campaign.state = CampaignState.failed if failed_count else CampaignState.completed
+            db.add(
+                AuditLog(
+                    campaign_id=campaign.id,
+                    action=campaign.state.value,
+                    detail={"failed_recipients": failed_count},
+                )
+            )
             db.commit()
 
 

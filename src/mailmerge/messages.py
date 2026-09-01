@@ -6,6 +6,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from pathlib import Path
 
+from .config import settings
 from .models import Campaign, Profile
 from .rendering import RenderedMessage
 
@@ -34,7 +35,7 @@ def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMe
         raw_base = campaign.unsubscribe_base_url or (profile.list_unsubscribe if profile else None) or "https://mailmerge.plus.bi"
         unsubscribe = raw_base
         if raw_base.startswith("http") and "/u/" not in raw_base:
-            secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET", "")
+            secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
             if secret:
                 from unsubscribe_service.main import sign_token
                 token = sign_token(campaign.name, recipient_email, secret=secret)

@@ -1,12 +1,22 @@
 import json
 import sqlite3
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from mailmerge.api import router, preflight
+from mailmerge.api import (
+    CampaignIn,
+    TestEmailIn as ApiTestEmailIn,
+    campaign_statuses,
+    duplicate_campaign,
+    preflight,
+    router,
+    send_test_email,
+    update_campaign,
+)
 from mailmerge.config import settings
 from mailmerge.db import Base, get_db
 from mailmerge.models import Campaign, Profile, Recipient, CampaignState
@@ -116,6 +126,144 @@ def test_api_json_recipient_import_and_preflight(client, test_db_session):
     # 8. Verify Campaign and its recipients are deleted
     get_res = client.get(f"/api/v1/campaigns/{campaign_id}")
     assert get_res.status_code == 404
+
+
+def test_campaign_statuses_only_include_launched_campaigns(test_db_session):
+    draft = Campaign(name="Draft", state=CampaignState.draft)
+    launched = Campaign(
+        name="Launched",
+        state=CampaignState.failed,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    test_db_session.add_all([draft, launched])
+    test_db_session.flush()
+    test_db_session.add_all(
+        [
+            Recipient(
+                campaign_id=launched.id,
+                email="sent@example.com",
+                normalized_email="sent@example.com",
+                status="sent",
+            ),
+            Recipient(
+                campaign_id=launched.id,
+                email="failed@example.com",
+                normalized_email="failed@example.com",
+                status="failed",
+            ),
+        ]
+    )
+    test_db_session.commit()
+
+    response = [item.model_dump(mode="json") for item in campaign_statuses(test_db_session)]
+
+    assert response == [
+        {
+            "id": launched.id,
+            "name": "Launched",
+            "state": "failed",
+            "scheduled_at": launched.scheduled_at.isoformat(),
+            "counts": {"failed": 1, "sent": 1},
+            "total": 2,
+        }
+    ]
+
+
+def test_cancelled_campaign_can_be_edited(test_db_session):
+    campaign = Campaign(name="Cancelled", state=CampaignState.cancelled)
+    test_db_session.add(campaign)
+    test_db_session.commit()
+
+    updated = update_campaign(
+        campaign.id,
+        CampaignIn(name="Cancelled, updated", subject_template="Updated subject"),
+        test_db_session,
+    )
+
+    assert updated.name == "Cancelled, updated"
+    assert updated.subject_template == "Updated subject"
+    assert updated.state == CampaignState.cancelled
+
+
+def test_duplicate_campaign_copies_settings_into_clean_draft(test_db_session):
+    source = Campaign(
+        name="Original",
+        purpose="marketing",
+        state=CampaignState.cancelled,
+        scheduled_at=datetime.now(timezone.utc),
+        from_name="Sender",
+        from_address="sender@example.com",
+        subject_template="Hello {{ first_name }}",
+        body_template="Body {{ unsubscribe_url }}",
+        consent_acknowledged=True,
+        list_unsubscribe_enabled=True,
+        unsubscribe_base_url="https://mailmerge.plus.bi",
+    )
+    test_db_session.add(source)
+    test_db_session.flush()
+    test_db_session.add(
+        Recipient(
+            campaign_id=source.id,
+            email="person@example.com",
+            normalized_email="person@example.com",
+        )
+    )
+    test_db_session.commit()
+
+    duplicate = duplicate_campaign(source.id, test_db_session)
+
+    assert duplicate.id != source.id
+    assert duplicate.name == "Original (copy)"
+    assert duplicate.state == CampaignState.draft
+    assert duplicate.scheduled_at is None
+    assert duplicate.purpose == source.purpose
+    assert duplicate.subject_template == source.subject_template
+    assert duplicate.body_template == source.body_template
+    assert duplicate.list_unsubscribe_enabled is True
+    assert duplicate.recipients == []
+
+
+def test_send_test_email_injects_unsubscribe_url(test_db_session, monkeypatch):
+    profile = Profile(name="Test SMTP", smtp_host="localhost", smtp_port=1025, security="none")
+    test_db_session.add(profile)
+    test_db_session.flush()
+    campaign = Campaign(
+        name="Unsubscribe test",
+        profile_id=profile.id,
+        from_address="sender@example.com",
+        subject_template="Hello {{ first_name }}",
+        body_template="Hi {{ first_name }}. Unsubscribe: {{ unsubscribe_url }}",
+        list_unsubscribe_enabled=True,
+        unsubscribe_base_url="https://mailmerge.plus.bi",
+    )
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    recipient = Recipient(
+        campaign_id=campaign.id,
+        email="sample@example.com",
+        normalized_email="sample@example.com",
+        values={"first_name": "Sample"},
+    )
+    test_db_session.add(recipient)
+    test_db_session.commit()
+    monkeypatch.setenv("UNSUBSCRIBE_SIGNING_SECRET", "test-secret")
+    smtp_client = MagicMock()
+    sent_messages = []
+
+    with (
+        patch("mailmerge.api.get_secret", return_value=None),
+        patch("mailmerge.api.connect", return_value=smtp_client),
+        patch("mailmerge.api.send", lambda _client, message: sent_messages.append(message)),
+    ):
+        result = send_test_email(
+            campaign.id,
+            ApiTestEmailIn(recipient_email="tester@example.com", sample_recipient_id=recipient.id),
+            test_db_session,
+        )
+
+    assert result["ok"] is True
+    plain_body = sent_messages[0].get_body(preferencelist=("plain",)).get_content()
+    assert "https://mailmerge.plus.bi/u/" in plain_body
 
 
 def test_profile_manager_import_edit_and_save_toml(client, tmp_path, monkeypatch):

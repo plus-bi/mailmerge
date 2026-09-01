@@ -23,7 +23,7 @@ from .json_import import parse_recipients_json
 from .messages import build_message
 from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
-from .rendering import render_message, validate_template_variables
+from .rendering import get_required_variables, render_message, validate_template_variables
 from .secrets import get_secret, set_secret
 from .smtp import connect, send
 from .suppression import sync_suppressions
@@ -134,6 +134,15 @@ class CampaignOut(ORMModel):
     list_unsubscribe_enabled: bool
     unsubscribe_base_url: str | None
     scheduled_at: datetime | None
+
+
+class CampaignStatusOut(BaseModel):
+    id: str
+    name: str
+    state: CampaignState
+    scheduled_at: datetime
+    counts: dict[str, int]
+    total: int
 
 
 class RecipientOut(ORMModel):
@@ -296,6 +305,35 @@ def create_campaign(data: CampaignIn, db: Session = Depends(get_db)):
     return campaign
 
 
+@router.get("/campaigns/status", response_model=list[CampaignStatusOut])
+def campaign_statuses(db: Session = Depends(get_db)):
+    launched = db.scalars(
+        select(Campaign)
+        .where(Campaign.scheduled_at.is_not(None))
+        .order_by(Campaign.scheduled_at.desc())
+    ).all()
+    result = []
+    for campaign in launched:
+        counts = dict(
+            db.execute(
+                select(Recipient.status, func.count())
+                .where(Recipient.campaign_id == campaign.id)
+                .group_by(Recipient.status)
+            ).all()
+        )
+        result.append(
+            CampaignStatusOut(
+                id=campaign.id,
+                name=campaign.name,
+                state=campaign.state,
+                scheduled_at=campaign.scheduled_at,
+                counts=counts,
+                total=sum(counts.values()),
+            )
+        )
+    return result
+
+
 @router.get("/campaigns/{campaign_id}", response_model=CampaignOut)
 def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
     return _campaign(db, campaign_id)
@@ -304,12 +342,23 @@ def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
 @router.put("/campaigns/{campaign_id}", response_model=CampaignOut)
 def update_campaign(campaign_id: str, data: CampaignIn, db: Session = Depends(get_db)):
     campaign = _campaign(db, campaign_id)
-    if campaign.state not in {CampaignState.draft, CampaignState.paused}:
+    if campaign.state not in {CampaignState.draft, CampaignState.paused, CampaignState.cancelled}:
         raise HTTPException(409, "campaign cannot be edited in this state")
     for key, value in data.model_dump().items():
         setattr(campaign, key, value)
     db.commit()
     return campaign
+
+
+@router.post("/campaigns/{campaign_id}/duplicate", response_model=CampaignOut)
+def duplicate_campaign(campaign_id: str, db: Session = Depends(get_db)):
+    source = _campaign(db, campaign_id)
+    settings_copy = {field: getattr(source, field) for field in CampaignIn.model_fields}
+    settings_copy["name"] = f"{source.name} (copy)"
+    duplicate = Campaign(**settings_copy)
+    db.add(duplicate)
+    db.commit()
+    return duplicate
 
 
 @router.delete("/campaigns/{campaign_id}")
@@ -406,6 +455,19 @@ async def add_attachment(campaign_id: str, file: UploadFile = File(...), db: Ses
     return {"id": attachment.id, "filename": attachment.filename, "size": attachment.size}
 
 
+def _recipient_unsubscribe_url(campaign: Campaign, recipient_email: str) -> str | None:
+    secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
+    if not secret:
+        return None
+    from unsubscribe_service.main import sign_token
+
+    raw_base = campaign.unsubscribe_base_url or "https://mailmerge.plus.bi"
+    if "/u/" in raw_base:
+        raw_base = raw_base.split("/u/", 1)[0]
+    token = sign_token(campaign.name, recipient_email, secret=secret)
+    return f"{raw_base.rstrip('/')}/u/{token}"
+
+
 def preflight(campaign: Campaign, db: Session) -> dict:
     errors: list[str] = []
     previews: list[dict] = []
@@ -420,11 +482,9 @@ def preflight(campaign: Campaign, db: Session) -> dict:
         values = dict(recipient.values)
         values.setdefault("email", recipient.email)
         if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
-            secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
-            if secret:
-                from unsubscribe_service.main import sign_token
-                token = sign_token(campaign.name, recipient.email, secret=secret)
-                values.setdefault("unsubscribe_url", f"https://mailmerge.plus.bi/u/{token}")
+            unsubscribe_url = _recipient_unsubscribe_url(campaign, recipient.email)
+            if unsubscribe_url:
+                values.setdefault("unsubscribe_url", unsubscribe_url)
 
         # Validate that all required template variables are populated
         missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
@@ -489,11 +549,9 @@ def preview_recipient(campaign_id: str, recipient_id: str, db: Session = Depends
     values = dict(recipient.values)
     values.setdefault("email", recipient.email)
     if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
-        secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
-        if secret:
-            from unsubscribe_service.main import sign_token
-            token = sign_token(campaign.name, recipient.email, secret=secret)
-            values.setdefault("unsubscribe_url", f"https://mailmerge.plus.bi/u/{token}")
+        unsubscribe_url = _recipient_unsubscribe_url(campaign, recipient.email)
+        if unsubscribe_url:
+            values.setdefault("unsubscribe_url", unsubscribe_url)
     missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
     try:
         rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
@@ -586,6 +644,12 @@ def send_test_email(campaign_id: str, data: TestEmailIn, db: Session = Depends(g
 
     values = dict(sample_recipient.values) if sample_recipient else {}
     values.setdefault("email", data.recipient_email)
+    if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+        unsubscribe_url = _recipient_unsubscribe_url(campaign, data.recipient_email)
+        if unsubscribe_url:
+            values.setdefault("unsubscribe_url", unsubscribe_url)
+        elif "unsubscribe_url" in get_required_variables(campaign.subject_template, campaign.body_template):
+            raise HTTPException(422, "Unsubscribe signing secret is not configured")
 
     missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
     if missing_vars:
