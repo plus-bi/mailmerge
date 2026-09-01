@@ -61,7 +61,10 @@ def get_required_variables(subject_template: str, body_template: str) -> set[str
 
 def validate_template_variables(subject_template: str, body_template: str, values: dict) -> list[str]:
     required = get_required_variables(subject_template, body_template)
-    missing = [var for var in sorted(required) if var not in values or values[var] is None or values[var] == ""]
+    missing = [
+        var for var in sorted(required)
+        if var != "unsubscribe_url" and (var not in values or values[var] is None or values[var] == "")
+    ]
     return missing
 
 

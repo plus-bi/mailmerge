@@ -225,3 +225,64 @@ def test_suppression_sync_from_sqlite_db(test_db_session, tmp_path, monkeypatch)
     assert recipient.suppressed is True
     assert recipient2.suppressed is True
     assert campaign.suppression_synced is True
+
+
+def test_generate_unsubscribe_token_endpoint(client, test_db_session, monkeypatch):
+    monkeypatch.setenv("UNSUBSCRIBE_SIGNING_SECRET", "test-secret-123")
+    campaign = Campaign(id="camp-xyz", name="Camp XYZ", purpose="marketing")
+    test_db_session.add(campaign)
+    test_db_session.commit()
+
+    res = client.post(
+        "/api/v1/campaigns/camp-xyz/generate-unsubscribe-token",
+        json={"recipient_id": "all", "base_url": "https://unsub.example.com"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["campaign_id"] == "Camp XYZ"
+    assert data["recipient_id"] == "all"
+    assert data["token"]
+    assert data["unsubscribe_url"].startswith("https://unsub.example.com/u/")
+    assert data["token"] in data["unsubscribe_url"]
+
+    # Verify token with unsubscribe service
+    from unsubscribe_service.main import verify_token
+    payload = verify_token(data["token"], secret="test-secret-123")
+    assert payload["c"] == "Camp XYZ"
+    assert payload["r"] == "all"
+
+
+def test_get_unsubscribe_config(client, monkeypatch):
+    monkeypatch.setenv("UNSUBSCRIBE_SIGNING_SECRET", "test-secret-123")
+    monkeypatch.setenv("DOMAIN", "mail.example.com")
+    res = client.get("/api/v1/unsubscribe-config")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["signing_secret_configured"] is True
+    assert data["domain"] == "mail.example.com"
+    assert data["default_base_url"] == "https://mailmerge.plus.bi"
+
+
+def test_suppression_sync_with_email_recipient_id(test_db_session, tmp_path, monkeypatch):
+    unsub_db_file = tmp_path / "unsub_events.db"
+    with sqlite3.connect(unsub_db_file) as conn:
+        conn.execute("""CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            recipient_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )""")
+        conn.execute("INSERT INTO events (campaign_id, recipient_id, created_at) VALUES ('Camp 1', 'target@example.com', 1700000000)")
+
+    monkeypatch.setenv("UNSUBSCRIBE_DB", str(unsub_db_file))
+
+    campaign = Campaign(id="c1", name="Camp 1", purpose="operational", suppression_synced=False)
+    recipient = Recipient(id="r1", campaign_id="c1", email="Target@Example.com", normalized_email="target@example.com")
+    recipient2 = Recipient(id="r2", campaign_id="c2", email="target@example.com", normalized_email="target@example.com")
+    test_db_session.add_all([campaign, recipient, recipient2])
+    test_db_session.commit()
+
+    count = sync_suppressions(test_db_session)
+    assert count == 1
+    assert recipient.suppressed is True
+    assert recipient2.suppressed is True

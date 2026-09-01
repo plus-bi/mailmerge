@@ -60,12 +60,17 @@ def sync_suppressions(db: Session, sync_url: str | None = None, sync_secret: str
     for event in synced_events:
         count += 1
         recipient_id = event.get("recipient_id")
-        recipient = db.get(Recipient, recipient_id) if recipient_id else None
-        if recipient:
-            recipient.suppressed = True
-            norm_email = recipient.normalized_email
-            if norm_email:
+        if recipient_id:
+            if "@" in recipient_id:
+                norm_email = recipient_id.strip().lower()
                 db.query(Recipient).filter(Recipient.normalized_email == norm_email).update({"suppressed": True})
+            else:
+                recipient = db.get(Recipient, recipient_id)
+                if recipient:
+                    recipient.suppressed = True
+                    norm_email = recipient.normalized_email
+                    if norm_email:
+                        db.query(Recipient).filter(Recipient.normalized_email == norm_email).update({"suppressed": True})
 
     cursor_record.cursor = str(new_cursor)
     cursor_record.updated_at = datetime.now(timezone.utc)

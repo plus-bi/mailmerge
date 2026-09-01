@@ -13,6 +13,8 @@ import './style.css';
 type Profile = {
   id: string;
   name: string;
+  from_name: string | null;
+  from_address: string | null;
   smtp_host: string;
   smtp_port: number;
   security: 'starttls' | 'tls' | 'none';
@@ -23,8 +25,8 @@ type Profile = {
   delay_seconds: number;
   max_message_bytes: number;
   reply_to: string | null;
-  list_unsubscribe: string | null;
-  list_unsubscribe_one_click: boolean;
+  list_unsubscribe?: string | null;
+  list_unsubscribe_one_click?: boolean;
   working_hours_enabled: boolean;
   working_hours_start: number;
   working_hours_end: number;
@@ -38,6 +40,8 @@ type ProfileDraft = Omit<Profile, 'id'> & { password: string };
 
 const blankProfile = (): ProfileDraft => ({
   name: '',
+  from_name: '',
+  from_address: '',
   smtp_host: '',
   smtp_port: 587,
   security: 'starttls',
@@ -49,8 +53,6 @@ const blankProfile = (): ProfileDraft => ({
   delay_seconds: 2,
   max_message_bytes: 20000000,
   reply_to: '',
-  list_unsubscribe: '',
-  list_unsubscribe_one_click: false,
   working_hours_enabled: false,
   working_hours_start: 9,
   working_hours_end: 17,
@@ -60,7 +62,29 @@ const blankProfile = (): ProfileDraft => ({
   imap_security: null,
 });
 
-const profileToDraft = (profile: Profile): ProfileDraft => ({ ...profile, password: '' });
+const profileToDraft = (profile: Profile): ProfileDraft => ({
+  name: profile.name,
+  from_name: profile.from_name ?? '',
+  from_address: profile.from_address ?? '',
+  smtp_host: profile.smtp_host,
+  smtp_port: profile.smtp_port,
+  security: profile.security,
+  verify_tls: profile.verify_tls,
+  username: profile.username ?? '',
+  auth_type: profile.auth_type,
+  password: '',
+  daily_cap: profile.daily_cap,
+  delay_seconds: profile.delay_seconds,
+  max_message_bytes: profile.max_message_bytes,
+  reply_to: profile.reply_to ?? '',
+  working_hours_enabled: profile.working_hours_enabled,
+  working_hours_start: profile.working_hours_start,
+  working_hours_end: profile.working_hours_end,
+  working_hours_timezone: profile.working_hours_timezone,
+  imap_host: profile.imap_host ?? '',
+  imap_port: profile.imap_port,
+  imap_security: profile.imap_security,
+});
 
 type Campaign = {
   id: string;
@@ -81,6 +105,7 @@ type Campaign = {
   working_hours_timezone: string;
   consent_acknowledged: boolean;
   suppression_synced: boolean;
+  list_unsubscribe_enabled: boolean;
   unsubscribe_base_url: string | null;
   scheduled_at: string | null;
 };
@@ -112,6 +137,12 @@ type PreflightResult = {
   previews: PreviewData[];
   excluded: number;
   attachments: { name: string; size: number }[];
+};
+
+type UnsubscribeConfig = {
+  signing_secret_configured: boolean;
+  domain: string | null;
+  default_base_url: string;
 };
 
 function Dashboard() {
@@ -147,6 +178,7 @@ function Dashboard() {
   const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send'>('template');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [unsubConfig, setUnsubConfig] = useState<UnsubscribeConfig | null>(null);
 
   // Form & Ingestion State
   const [form, setForm] = useState<Partial<Campaign>>({});
@@ -203,6 +235,13 @@ function Dashboard() {
     }
   };
 
+  const loadUnsubConfig = async () => {
+    try {
+      const data = await api('/unsubscribe-config');
+      setUnsubConfig(data);
+    } catch {}
+  };
+
   const openNewProfile = () => {
     setEditingProfileId(null);
     setProfileForm(blankProfile());
@@ -221,10 +260,11 @@ function Dashboard() {
       const payload = {
         ...profileValues,
         name: profileForm.name.trim(),
+        from_name: profileForm.from_name?.trim() || null,
+        from_address: profileForm.from_address?.trim() || null,
         smtp_host: profileForm.smtp_host.trim(),
         username: profileForm.username?.trim() || null,
         reply_to: profileForm.reply_to?.trim() || null,
-        list_unsubscribe: profileForm.list_unsubscribe?.trim() || null,
         imap_host: profileForm.imap_host?.trim() || null,
         imap_port: profileForm.imap_host ? profileForm.imap_port : null,
         imap_security: profileForm.imap_host ? profileForm.imap_security : null,
@@ -313,6 +353,7 @@ function Dashboard() {
   useEffect(() => {
     void loadCampaigns();
     void loadProfiles();
+    void loadUnsubConfig();
   }, []);
 
   useEffect(() => {
@@ -391,6 +432,8 @@ function Dashboard() {
       notify(e.message, true);
     }
   };
+
+
 
   const handleDeleteCampaign = async (campaignToDelete?: Campaign) => {
     const target = campaignToDelete || selected;
@@ -684,6 +727,20 @@ function Dashboard() {
                 </div>
 
                 <fieldset>
+                  <legend>Sender Identity</legend>
+                  <div className="form-grid compact">
+                    <div className="form-group">
+                      <label htmlFor="profile-from-name">Sender Name</label>
+                      <input id="profile-from-name" value={profileForm.from_name || ''} onChange={(e) => setProfileForm({ ...profileForm, from_name: e.target.value })} placeholder="Alex Smith" />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="profile-from-address">Sender Email</label>
+                      <input id="profile-from-address" type="email" value={profileForm.from_address || ''} onChange={(e) => setProfileForm({ ...profileForm, from_address: e.target.value })} placeholder="alex@example.com" />
+                    </div>
+                  </div>
+                </fieldset>
+
+                <fieldset>
                   <legend>SMTP connection</legend>
                   <div className="form-grid compact">
                     <div className="form-group full">
@@ -745,13 +802,6 @@ function Dashboard() {
                     <div className="form-group">
                       <label htmlFor="profile-size">Maximum message size (bytes)</label>
                       <input id="profile-size" type="number" min={1024} value={profileForm.max_message_bytes} onChange={(e) => setProfileForm({ ...profileForm, max_message_bytes: Number(e.target.value) })} />
-                    </div>
-                    <div className="form-group full">
-                      <label htmlFor="profile-unsubscribe">List-Unsubscribe URL</label>
-                      <input id="profile-unsubscribe" value={profileForm.list_unsubscribe || ''} onChange={(e) => setProfileForm({ ...profileForm, list_unsubscribe: e.target.value })} placeholder="https://unsubscribe.example.com/u/list-token" />
-                    </div>
-                    <div className="form-group full checkbox-field">
-                      <label><input type="checkbox" checked={profileForm.list_unsubscribe_one_click} onChange={(e) => setProfileForm({ ...profileForm, list_unsubscribe_one_click: e.target.checked })} /> Enable RFC 8058 one-click unsubscribe</label>
                     </div>
                   </div>
                 </fieldset>
@@ -927,6 +977,28 @@ function Dashboard() {
               {activeTab === 'template' && (
                 <div>
                   <div className="form-grid">
+                    <div className="form-group full">
+                      <label>Campaign ID</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input
+                          type="text"
+                          readOnly
+                          value={selected.id}
+                          style={{ background: '#f4f6f3', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                        />
+                        <button
+                          type="button"
+                          className="secondary"
+                          style={{ padding: '0 14px', whiteSpace: 'nowrap' }}
+                          onClick={() => {
+                            navigator.clipboard.writeText(selected.id);
+                            notify('Campaign ID copied to clipboard.');
+                          }}
+                        >
+                          📋 Copy ID
+                        </button>
+                      </div>
+                    </div>
                     <div className="form-group">
                       <label>Campaign Name</label>
                       <input
@@ -939,7 +1011,17 @@ function Dashboard() {
                       <label>Sender Profile</label>
                       <select
                         value={form.profile_id || ''}
-                        onChange={(e) => setForm({ ...form, profile_id: e.target.value })}
+                        onChange={(e) => {
+                          const selectedPid = e.target.value;
+                          const prof = profiles.find((p) => p.id === selectedPid);
+                          setForm((prev) => ({
+                            ...prev,
+                            profile_id: selectedPid,
+                            from_name: prev.from_name || (prof?.from_name ?? ''),
+                            from_address: prev.from_address || (prof?.from_address ?? ''),
+                            reply_to: prev.reply_to || (prof?.reply_to ?? ''),
+                          }));
+                        }}
                       >
                         <option value="">Select a profile...</option>
                         {profiles.map((p) => (
@@ -1005,6 +1087,35 @@ function Dashboard() {
                       value={form.body_template || ''}
                       onChange={(e) => setForm({ ...form, body_template: e.target.value })}
                     />
+                  </div>
+
+                  {/* List-Unsubscribe Header Configuration */}
+                  <div className="card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                      <h3 style={{ margin: 0, fontSize: '1rem' }}>🔕 RFC 8058 One-Click Unsubscribe (List-Unsubscribe)</h3>
+                      {unsubConfig?.signing_secret_configured ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#e6f4ed', color: '#176b45', padding: '3px 8px', borderRadius: '4px', fontSize: '0.78rem', fontWeight: 600 }}>
+                          🔒 UNSUBSCRIBE_SIGNING_SECRET active (.env)
+                        </span>
+                      ) : (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#fff3cd', color: '#856404', padding: '3px 8px', borderRadius: '4px', fontSize: '0.78rem' }}>
+                          ⚠️ UNSUBSCRIBE_SIGNING_SECRET not set in .env
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
+                      Base URL is fixed to <code>https://mailmerge.plus.bi</code>. When enabled, the backend dynamically generates an HMAC-SHA256 signature for each recipient using campaign <em>"{selected.name}"</em> and injects <code>List-Unsubscribe</code> &amp; <code>List-Unsubscribe-Post</code> headers.
+                    </p>
+                    <div className="form-group full checkbox-field" style={{ margin: 0 }}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+                        <input
+                          type="checkbox"
+                          checked={form.list_unsubscribe_enabled ?? false}
+                          onChange={(e) => setForm({ ...form, list_unsubscribe_enabled: e.target.checked })}
+                        />
+                        Enable RFC 8058 One-Click Unsubscribe
+                      </label>
+                    </div>
                   </div>
 
                   {/* Delivery Pacing & Working Hours */}

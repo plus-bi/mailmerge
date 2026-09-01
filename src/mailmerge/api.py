@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -35,32 +37,36 @@ class ORMModel(BaseModel):
 
 class ProfileIn(BaseModel):
     name: str
+    from_name: str | None = ""
+    from_address: str | None = ""
     smtp_host: str
-    smtp_port: int = Field(default=587, ge=1, le=65535)
-    security: Literal["starttls", "tls", "none"] = "starttls"
+    smtp_port: int
+    security: Literal["starttls", "tls", "none"]
     verify_tls: bool = True
     username: str | None = None
-    auth_type: Literal["password", "xoauth2"] = "password"
+    auth_type: str = "password"
     password: str | None = None
     access_token: str | None = None
-    daily_cap: int = Field(default=250, ge=1)
-    delay_seconds: int = Field(default=2, ge=0)
-    max_message_bytes: int = Field(default=20_000_000, ge=1024)
+    daily_cap: int = 250
+    delay_seconds: int = 2
+    max_message_bytes: int = 20_000_000
     reply_to: str | None = None
     list_unsubscribe: str | None = None
     list_unsubscribe_one_click: bool = False
     working_hours_enabled: bool = False
-    working_hours_start: int = Field(default=9, ge=0, le=23)
-    working_hours_end: int = Field(default=17, ge=0, le=23)
+    working_hours_start: int = 9
+    working_hours_end: int = 17
     working_hours_timezone: str = "UTC"
     imap_host: str | None = None
-    imap_port: int | None = Field(default=None, ge=1, le=65535)
+    imap_port: int | None = None
     imap_security: Literal["starttls", "tls", "none"] | None = None
 
 
 class ProfileOut(ORMModel):
     id: str
     name: str
+    from_name: str | None = ""
+    from_address: str | None = ""
     smtp_host: str
     smtp_port: int
     security: str
@@ -102,7 +108,8 @@ class CampaignIn(BaseModel):
     working_hours_end: int = Field(default=17, ge=0, le=23)
     working_hours_timezone: str = "UTC"
     consent_acknowledged: bool = False
-    unsubscribe_base_url: str | None = None
+    list_unsubscribe_enabled: bool = False
+    unsubscribe_base_url: str | None = "https://mailmerge.plus.bi"
 
 
 class CampaignOut(ORMModel):
@@ -124,6 +131,7 @@ class CampaignOut(ORMModel):
     working_hours_timezone: str
     consent_acknowledged: bool
     suppression_synced: bool
+    list_unsubscribe_enabled: bool
     unsubscribe_base_url: str | None
     scheduled_at: datetime | None
 
@@ -146,6 +154,25 @@ class RecipientOut(ORMModel):
 class TestEmailIn(BaseModel):
     recipient_email: str
     sample_recipient_id: str | None = None
+
+
+class GenerateTokenIn(BaseModel):
+    recipient_id: str = "all"
+    base_url: str | None = None
+    signing_secret: str | None = None
+
+
+class GenerateTokenOut(BaseModel):
+    campaign_id: str
+    recipient_id: str
+    token: str
+    unsubscribe_url: str
+
+
+class UnsubscribeConfigOut(BaseModel):
+    signing_secret_configured: bool
+    domain: str | None = None
+    default_base_url: str
 
 
 @router.get("/profiles", response_model=list[ProfileOut])
@@ -255,6 +282,15 @@ def create_campaign(data: CampaignIn, db: Session = Depends(get_db)):
     if data.purpose not in {"operational", "marketing"} or data.body_mode not in {"markdown", "html"}:
         raise HTTPException(422, "invalid purpose or body mode")
     campaign = Campaign(**data.model_dump())
+    if data.profile_id:
+        profile = db.get(Profile, data.profile_id)
+        if profile:
+            if not campaign.from_name and profile.from_name:
+                campaign.from_name = profile.from_name
+            if not campaign.from_address and profile.from_address:
+                campaign.from_address = profile.from_address
+            if not campaign.reply_to and profile.reply_to:
+                campaign.reply_to = profile.reply_to
     db.add(campaign)
     db.commit()
     return campaign
@@ -383,6 +419,12 @@ def preflight(campaign: Campaign, db: Session) -> dict:
             continue
         values = dict(recipient.values)
         values.setdefault("email", recipient.email)
+        if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+            secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
+            if secret:
+                from unsubscribe_service.main import sign_token
+                token = sign_token(campaign.name, recipient.email, secret=secret)
+                values.setdefault("unsubscribe_url", f"https://mailmerge.plus.bi/u/{token}")
 
         # Validate that all required template variables are populated
         missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
@@ -421,8 +463,8 @@ def preflight(campaign: Campaign, db: Session) -> dict:
             errors.append("marketing consent must be acknowledged")
         if not campaign.suppression_synced:
             errors.append("suppression synchronization is required")
-        if not campaign.unsubscribe_base_url:
-            errors.append("unsubscribe service is required")
+        if not campaign.list_unsubscribe_enabled and not campaign.unsubscribe_base_url:
+            errors.append("list-unsubscribe must be enabled for marketing campaigns")
 
     return {
         "ok": not errors,
@@ -446,6 +488,12 @@ def preview_recipient(campaign_id: str, recipient_id: str, db: Session = Depends
         raise HTTPException(404, "recipient not found in this campaign")
     values = dict(recipient.values)
     values.setdefault("email", recipient.email)
+    if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+        secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
+        if secret:
+            from unsubscribe_service.main import sign_token
+            token = sign_token(campaign.name, recipient.email, secret=secret)
+            values.setdefault("unsubscribe_url", f"https://mailmerge.plus.bi/u/{token}")
     missing_vars = validate_template_variables(campaign.subject_template, campaign.body_template, values)
     try:
         rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
@@ -472,6 +520,51 @@ def trigger_suppression_sync(campaign_id: str, db: Session = Depends(get_db)):
         select(func.count()).select_from(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.suppressed)
     ) or 0
     return {"ok": True, "synced_events": synced_count, "campaign_suppressed_recipients": suppressed_count}
+
+
+@router.post("/campaigns/{campaign_id}/generate-unsubscribe-token", response_model=GenerateTokenOut)
+def generate_campaign_token(
+    campaign_id: str,
+    data: GenerateTokenIn = GenerateTokenIn(),
+    db: Session = Depends(get_db),
+):
+    campaign = _campaign(db, campaign_id)
+    secret = (
+        data.signing_secret
+        or os.getenv("UNSUBSCRIBE_SIGNING_SECRET")
+        or settings.unsubscribe_signing_secret
+        or "mailmerge-unsubscribe-secret"
+    )
+    from unsubscribe_service.main import sign_token
+
+    recipient_id = data.recipient_id.strip() if data.recipient_id else "all"
+    token = sign_token(campaign.name, recipient_id, secret=secret)
+
+    raw_base = (data.base_url or campaign.unsubscribe_base_url or "https://mailmerge.plus.bi").strip()
+    if "/u/" in raw_base:
+        raw_base = raw_base.split("/u/")[0]
+    raw_base = raw_base.rstrip("/")
+
+    full_url = f"{raw_base}/u/{token}"
+    return GenerateTokenOut(
+        campaign_id=campaign.name,
+        recipient_id=recipient_id,
+        token=token,
+        unsubscribe_url=full_url,
+    )
+
+
+@router.get("/unsubscribe-config", response_model=UnsubscribeConfigOut)
+def get_unsubscribe_config():
+    secret_configured = bool(os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or os.getenv("MAILMERGE_UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret)
+    domain = os.getenv("DOMAIN") or os.getenv("MAILMERGE_DOMAIN") or settings.domain
+    default_base = "https://mailmerge.plus.bi"
+
+    return UnsubscribeConfigOut(
+        signing_secret_configured=secret_configured,
+        domain=domain,
+        default_base_url=default_base,
+    )
 
 
 @router.post("/campaigns/{campaign_id}/test-email")

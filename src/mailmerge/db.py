@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -34,3 +34,21 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(engine)
+
+    with engine.connect() as conn:
+        for table, col, col_type in [
+            ("profiles", "from_name", "VARCHAR(200)"),
+            ("profiles", "from_address", "VARCHAR(320)"),
+            ("profiles", "list_unsubscribe", "VARCHAR(1000)"),
+            ("profiles", "list_unsubscribe_one_click", "BOOLEAN DEFAULT 0"),
+            ("campaigns", "list_unsubscribe_enabled", "BOOLEAN DEFAULT 0"),
+            ("campaigns", "unsubscribe_base_url", "VARCHAR(500)"),
+            ("campaigns", "from_name", "VARCHAR(200) DEFAULT ''"),
+            ("campaigns", "from_address", "VARCHAR(320) DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
+                conn.commit()
+            except Exception:
+                pass
+

@@ -15,7 +15,7 @@ from .secrets import set_secret
 from .rendering import valid_email
 
 ALLOWED_FIELDS = {
-    "smtp_host", "smtp_port", "security", "verify_tls", "username", "auth_type",
+    "from_name", "from_address", "smtp_host", "smtp_port", "security", "verify_tls", "username", "auth_type",
     "daily_cap", "delay_seconds", "max_message_bytes", "reply_to", "list_unsubscribe",
     "list_unsubscribe_one_click", "imap_host", "imap_port", "imap_security",
     "working_hours_enabled", "working_hours_start", "working_hours_end",
@@ -23,7 +23,7 @@ ALLOWED_FIELDS = {
 }
 
 PROFILE_FIELD_ORDER = (
-    "smtp_host", "smtp_port", "security", "verify_tls", "username", "auth_type",
+    "from_name", "from_address", "smtp_host", "smtp_port", "security", "verify_tls", "username", "auth_type",
     "reply_to", "list_unsubscribe", "list_unsubscribe_one_click", "imap_host",
     "imap_port", "imap_security", "daily_cap", "delay_seconds", "max_message_bytes",
     "working_hours_enabled", "working_hours_start", "working_hours_end",
@@ -39,6 +39,9 @@ def validate_profile_entry(entry: dict, index: int = 1) -> tuple[str, dict]:
         raise ValueError(f"profile {name!r} contains a secret; use password_env and the OS keychain")
     if not entry.get("smtp_host"):
         raise ValueError(f"profile {name!r} requires smtp_host")
+    from_address = entry.get("from_address")
+    if from_address and not valid_email(str(from_address)):
+        raise ValueError(f"profile {name!r} has invalid from_address")
     security = entry.get("security", "starttls")
     imap_security = entry.get("imap_security")
     if security not in {"starttls", "tls", "none"}:

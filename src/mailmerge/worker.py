@@ -96,6 +96,12 @@ def process_campaign(campaign_id: str) -> None:
                 try:
                     values = dict(recipient.values)
                     values.setdefault("email", recipient.email)
+                    if campaign.list_unsubscribe_enabled or campaign.purpose == "marketing":
+                        secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or ""
+                        if secret:
+                            from unsubscribe_service.main import sign_token
+                            token = sign_token(campaign.name, recipient.email, secret=secret)
+                            values.setdefault("unsubscribe_url", f"https://mailmerge.plus.bi/u/{token}")
                     rendered = render_message(campaign.subject_template, campaign.body_template, campaign.body_mode, values)
                     message = build_message(campaign, recipient.email, rendered, profile)
                     send(client, message)

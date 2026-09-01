@@ -117,6 +117,8 @@ def parse_recipients_json(
         missing: list[str] = []
         if required_vars:
             for var in required_vars:
+                if var == "unsubscribe_url":
+                    continue
                 val = values.get(var)
                 if val is None or val == "":
                     missing.append(var)
