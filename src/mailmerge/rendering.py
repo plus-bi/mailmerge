@@ -38,6 +38,7 @@ class RenderedMessage:
     subject: str
     html: str
     text: str
+    source: str | None = None
 
 
 def valid_email(value: str) -> bool:
@@ -112,4 +113,4 @@ def render_message(subject_template: str, body_template: str, body_mode: str, va
     if "\r" in subject or "\n" in subject:
         raise ValueError("subject may not contain newlines")
     rendered_html = _markdown(rendered) if body_mode == "markdown" else rendered
-    return RenderedMessage(subject=subject, html=rendered_html, text=html_to_text(rendered_html))
+    return RenderedMessage(subject=subject, html=rendered_html, text=html_to_text(rendered_html), source=rendered)

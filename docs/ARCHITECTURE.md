@@ -105,6 +105,7 @@ Database management is handled via SQLAlchemy 2.0 with SQLite in WAL mode:
 - `status`: String (`"pending"`, `"retry"`, `"sent"`, `"failed"`)
 - `message_id`: String (SMTP Message-ID header)
 - `sent_at`: DateTime (UTC)
+- `rendered_subject`, `rendered_markdown`: Personalized subject and Markdown snapshots saved after SMTP accepts the message
 - *Unique Constraint*: `("campaign_id", "normalized_email")`
 
 ### 3. `Profile` ([`models.py:Profile`](file:///home/haris/git/mailclient/src/mailmerge/models.py#L28))
@@ -137,7 +138,7 @@ The worker (`mailmerge.worker.run`) executes in a dedicated process:
    - Iterates through sendable recipients (`included`, `valid`, `~suppressed`, `status IN ('pending', 'retry')`).
    - Renders message with Jinja2 sandbox and builds MIME payload.
    - Dispatches message via SMTP.
-   - On success: marks `status = 'sent'`, records `sent_at`, and adds `DeliveryAttempt(outcome='sent')`.
+   - On success: marks `status = 'sent'`, records `sent_at`, stores the rendered subject and Markdown snapshots, and adds `DeliveryAttempt(outcome='sent')`.
    - On transient failure: schedules retry backoff (delays: 60s, 300s, 900s).
    - Sleeps for `campaign.delay_seconds` (or `profile.delay_seconds`) before sending the next recipient.
    - When all recipients are processed: sets campaign state to `completed`.

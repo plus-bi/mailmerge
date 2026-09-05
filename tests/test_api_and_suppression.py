@@ -10,10 +10,12 @@ from sqlalchemy.orm import sessionmaker
 from mailmerge.api import (
     CampaignIn,
     DuplicateCampaignIn,
+    GenerateTokenIn,
     ProfileConnectionTestIn,
     TestEmailIn as ApiTestEmailIn,
     campaign_statuses,
     duplicate_campaign,
+    generate_campaign_token,
     list_suppressions,
     preflight,
     preview_recipient,
@@ -494,7 +496,8 @@ def test_suppression_sync_from_sqlite_db(test_db_session, tmp_path, monkeypatch)
     assert len(events) == 1
     assert events[0].source_event_id == 1
     assert events[0].email == "unsub@example.com"
-    assert events[0].campaign == "c1"
+    assert events[0].campaign_id == "c1"
+    assert events[0].campaign == "Camp 1"
     assert events[0].unsubscribed_at == datetime.fromtimestamp(1700000000, timezone.utc).replace(tzinfo=None)
     assert suppression_list["last_synced_at"] is not None
 
@@ -502,19 +505,19 @@ def test_suppression_sync_from_sqlite_db(test_db_session, tmp_path, monkeypatch)
     assert result == {"ok": True, "synced_events": 0, "total": 1}
 
 
-def test_generate_unsubscribe_token_endpoint(client, test_db_session, monkeypatch):
+def test_generate_unsubscribe_token_endpoint(test_db_session, monkeypatch):
     monkeypatch.setenv("UNSUBSCRIBE_SIGNING_SECRET", "test-secret-123")
     campaign = Campaign(id="camp-xyz", name="Camp XYZ", purpose="marketing")
     test_db_session.add(campaign)
     test_db_session.commit()
 
-    res = client.post(
-        "/api/v1/campaigns/camp-xyz/generate-unsubscribe-token",
-        json={"recipient_id": "all", "base_url": "https://unsub.example.com"},
+    result = generate_campaign_token(
+        "camp-xyz",
+        GenerateTokenIn(recipient_id="all", base_url="https://unsub.example.com"),
+        test_db_session,
     )
-    assert res.status_code == 200
-    data = res.json()
-    assert data["campaign_id"] == "Camp XYZ"
+    data = result.model_dump()
+    assert data["campaign_id"] == "camp-xyz"
     assert data["recipient_id"] == "all"
     assert data["token"]
     assert data["unsubscribe_url"].startswith("https://unsub.example.com/u/")
@@ -523,7 +526,7 @@ def test_generate_unsubscribe_token_endpoint(client, test_db_session, monkeypatc
     # Verify token with unsubscribe service
     from unsubscribe_service.main import verify_token
     payload = verify_token(data["token"], secret="test-secret-123")
-    assert payload["c"] == "Camp XYZ"
+    assert payload["c"] == "camp-xyz"
     assert payload["r"] == "all"
 
 

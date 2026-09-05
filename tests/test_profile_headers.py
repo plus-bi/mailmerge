@@ -73,6 +73,7 @@ def test_profile_sender_identity_and_campaign_override():
 def test_list_unsubscribe_checkbox_dynamic_token(monkeypatch):
     monkeypatch.setenv("UNSUBSCRIBE_SIGNING_SECRET", "super-secret-key")
     campaign = Campaign(
+        id="autumn-newsletter-id",
         name="Autumn Newsletter",
         from_name="Newsletter Team",
         from_address="news@example.com",
@@ -87,7 +88,7 @@ def test_list_unsubscribe_checkbox_dynamic_token(monkeypatch):
     token = header.split("/u/")[1]
     from unsubscribe_service.main import verify_token
     payload = verify_token(token, secret="super-secret-key")
-    assert payload["c"] == "Autumn Newsletter"
+    assert payload["c"] == "autumn-newsletter-id"
     assert payload["r"] == "reader@example.com"
 
 

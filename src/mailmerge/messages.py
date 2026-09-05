@@ -35,7 +35,7 @@ def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMe
             secret = os.getenv("UNSUBSCRIBE_SIGNING_SECRET") or settings.unsubscribe_signing_secret or ""
             if secret:
                 from unsubscribe_service.main import sign_token
-                token = sign_token(campaign.name, recipient_email, secret=secret)
+                token = sign_token(campaign.id, recipient_email, secret=secret)
                 unsubscribe = f"{raw_base.rstrip('/')}/u/{token}"
         message["List-Unsubscribe"] = unsubscribe if unsubscribe.startswith("<") else f"<{unsubscribe}>"
         if unsubscribe.strip("<>").startswith("https://"):

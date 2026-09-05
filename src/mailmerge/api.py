@@ -158,6 +158,7 @@ class CampaignStatusOut(BaseModel):
 class UnsubscribeEventOut(ORMModel):
     source_event_id: int
     email: str
+    campaign_id: str | None
     campaign: str
     unsubscribed_at: datetime
 
@@ -544,7 +545,7 @@ def _recipient_unsubscribe_url(campaign: Campaign, recipient_email: str) -> str 
         raw_base = "https://unsub.plus.bi"
     if "/u/" in raw_base:
         raw_base = raw_base.split("/u/", 1)[0]
-    token = sign_token(campaign.name, recipient_email, secret=secret)
+    token = sign_token(campaign.id, recipient_email, secret=secret)
     return f"{raw_base.rstrip('/')}/u/{token}"
 
 
@@ -705,7 +706,7 @@ def generate_campaign_token(
     from unsubscribe_service.main import sign_token
 
     recipient_id = data.recipient_id.strip() if data.recipient_id else "all"
-    token = sign_token(campaign.name, recipient_id, secret=secret)
+    token = sign_token(campaign.id, recipient_id, secret=secret)
 
     raw_base = (data.base_url or campaign.unsubscribe_base_url or "https://unsub.plus.bi").strip()
     if raw_base.rstrip("/") == "https://mailmerge.plus.bi":
@@ -716,7 +717,7 @@ def generate_campaign_token(
 
     full_url = f"{raw_base}/u/{token}"
     return GenerateTokenOut(
-        campaign_id=campaign.name,
+        campaign_id=campaign.id,
         recipient_id=recipient_id,
         token=token,
         unsubscribe_url=full_url,

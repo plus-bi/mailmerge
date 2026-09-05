@@ -37,7 +37,7 @@ def _scheduled_campaign(test_db_session, *, name: str) -> Campaign:
         scheduled_at=datetime.now(timezone.utc),
         from_address="sender@example.com",
         subject_template="Hello {{ name }}",
-        body_template="Hi {{ name }}",
+        body_template="Hi **{{ name }}**",
         list_unsubscribe_enabled=True,
     )
     test_db_session.add(campaign)
@@ -70,7 +70,10 @@ def test_worker_records_delivery_failure_and_marks_campaign_failed(test_db_sessi
 
     test_db_session.expire_all()
     assert test_db_session.get(Campaign, campaign.id).state == CampaignState.failed
-    assert test_db_session.get(Recipient, recipient.id).status == "failed"
+    failed_recipient = test_db_session.get(Recipient, recipient.id)
+    assert failed_recipient.status == "failed"
+    assert failed_recipient.rendered_subject is None
+    assert failed_recipient.rendered_markdown is None
     attempt = test_db_session.query(DeliveryAttempt).filter_by(recipient_id=recipient.id).one()
     assert attempt.outcome == "permanent"
     assert attempt.detail == "SMTP test failure"
@@ -105,5 +108,8 @@ def test_worker_completes_when_all_sendable_recipients_are_sent(test_db_session,
 
     test_db_session.expire_all()
     assert test_db_session.get(Campaign, campaign.id).state == CampaignState.completed
-    assert test_db_session.get(Recipient, valid.id).status == "sent"
+    sent_recipient = test_db_session.get(Recipient, valid.id)
+    assert sent_recipient.status == "sent"
+    assert sent_recipient.rendered_subject == "Hello Valid"
+    assert sent_recipient.rendered_markdown == "Hi **Valid**"
     assert test_db_session.get(Recipient, excluded.id).status == "pending"

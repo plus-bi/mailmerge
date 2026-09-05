@@ -84,11 +84,20 @@ def sync_suppressions(db: Session, sync_url: str | None = None, sync_secret: str
         if source_event_id is not None and norm_email and created_at is not None:
             source_event_id = int(source_event_id)
             if not db.get(UnsubscribeEvent, source_event_id):
+                source_campaign = str(event.get("campaign_id") or "")
+                campaign = db.get(Campaign, source_campaign)
+                if not campaign and source_campaign:
+                    campaign = db.scalar(
+                        select(Campaign)
+                        .where(Campaign.name == source_campaign)
+                        .order_by(Campaign.created_at.desc())
+                    )
                 db.add(
                     UnsubscribeEvent(
                         source_event_id=source_event_id,
                         email=norm_email,
-                        campaign=str(event.get("campaign_id") or ""),
+                        campaign_id=campaign.id if campaign else source_campaign or None,
+                        campaign=campaign.name if campaign else source_campaign,
                         unsubscribed_at=datetime.fromtimestamp(int(created_at), timezone.utc),
                     )
                 )

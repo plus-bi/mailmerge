@@ -205,7 +205,7 @@ In the **📝 Setup & Template** tab:
 
 For marketing and outreach campaigns:
 1. **One-Click Unsubscribe**: Headers compliant with RFC 8058 (`List-Unsubscribe` and `List-Unsubscribe-Post`) are automatically generated.
-2. **Signed Unsubscribe URLs**: Each recipient receives a cryptographically signed HMAC token URL.
+2. **Signed Unsubscribe URLs**: Each recipient receives a cryptographically signed HMAC token containing the immutable campaign ID and recipient address.
 3. **Suppression Sync**:
    - Open the **Unsubscribed** tab and click **Sync Unsubscribe List**.
    - Mailmerge lists the email, campaign, and unsubscribe time, shows the most recent sync time beneath the button, and marks matching recipients as `suppressed = True`.

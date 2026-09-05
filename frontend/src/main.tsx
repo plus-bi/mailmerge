@@ -157,6 +157,7 @@ type UnsubscribeConfig = {
 type UnsubscribeEvent = {
   source_event_id: number;
   email: string;
+  campaign_id: string | null;
   campaign: string;
   unsubscribed_at: string;
 };
@@ -1695,7 +1696,12 @@ function Dashboard() {
                         {unsubscribeEvents.map((event) => (
                           <tr key={event.source_event_id}>
                             <td><strong>{event.email}</strong></td>
-                            <td>{event.campaign || 'Unknown'}</td>
+                            <td>
+                              <strong>{event.campaign || 'Unknown'}</strong>
+                              {event.campaign_id && (
+                                <div><code style={{ fontSize: '0.75rem' }}>{event.campaign_id}</code></div>
+                              )}
+                            </td>
                             <td>{new Date(event.unsubscribed_at).toLocaleString()}</td>
                           </tr>
                         ))}

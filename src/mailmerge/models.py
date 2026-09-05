@@ -98,6 +98,8 @@ class Recipient(Base):
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     message_id: Mapped[str | None] = mapped_column(String(255))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rendered_subject: Mapped[str | None] = mapped_column(Text)
+    rendered_markdown: Mapped[str | None] = mapped_column(Text)
 
 
 class Attachment(Base):
@@ -151,6 +153,7 @@ class UnsubscribeEvent(Base):
     __tablename__ = "unsubscribe_events"
     source_event_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(320), index=True)
+    campaign_id: Mapped[str | None] = mapped_column(String, index=True)
     campaign: Mapped[str] = mapped_column(String(200), index=True)
     unsubscribed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
