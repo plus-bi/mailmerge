@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
@@ -191,6 +191,24 @@ def test_cancelled_campaign_can_be_edited(test_db_session):
     assert updated.name == "Cancelled, updated"
     assert updated.subject_template == "Updated subject"
     assert updated.state == CampaignState.cancelled
+
+
+def test_future_scheduled_campaign_can_be_edited(test_db_session):
+    scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
+    campaign = Campaign(name="Later", state=CampaignState.scheduled, scheduled_at=scheduled_at)
+    test_db_session.add(campaign)
+    test_db_session.commit()
+
+    updated = update_campaign(
+        campaign.id,
+        CampaignIn(name="Later, updated", subject_template="Updated before launch"),
+        test_db_session,
+    )
+
+    assert updated.name == "Later, updated"
+    assert updated.subject_template == "Updated before launch"
+    assert updated.state == CampaignState.scheduled
+    assert updated.scheduled_at.replace(tzinfo=timezone.utc) == scheduled_at
 
 
 def test_duplicate_campaign_copies_settings_into_clean_draft(test_db_session):

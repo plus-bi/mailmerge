@@ -414,7 +414,15 @@ def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
 @router.put("/campaigns/{campaign_id}", response_model=CampaignOut)
 def update_campaign(campaign_id: str, data: CampaignIn, db: Session = Depends(get_db)):
     campaign = _campaign(db, campaign_id)
-    if campaign.state not in {CampaignState.draft, CampaignState.paused, CampaignState.cancelled}:
+    scheduled_at = campaign.scheduled_at
+    if scheduled_at and scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    is_future_scheduled = (
+        campaign.state == CampaignState.scheduled
+        and scheduled_at is not None
+        and scheduled_at > datetime.now(timezone.utc)
+    )
+    if campaign.state not in {CampaignState.draft, CampaignState.paused, CampaignState.cancelled} and not is_future_scheduled:
         raise HTTPException(409, "campaign cannot be edited in this state")
     for key, value in data.model_dump().items():
         setattr(campaign, key, value)

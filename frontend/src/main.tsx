@@ -167,6 +167,11 @@ type SuppressionList = {
   last_synced_at: string | null;
 };
 
+const localDateTimeValue = (date: Date) => {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+};
+
 function Dashboard() {
   const { getToken } = useAuth();
 
@@ -215,6 +220,7 @@ function Dashboard() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [testEmailAddress, setTestEmailAddress] = useState('');
+  const [scheduledStartLocal, setScheduledStartLocal] = useState('');
   const [selectedPreviewRecipientId, setSelectedPreviewRecipientId] = useState<string>('');
   const [previewContent, setPreviewContent] = useState<PreviewData | null>(null);
   const [preflightData, setPreflightData] = useState<PreflightResult | null>(null);
@@ -404,6 +410,11 @@ function Dashboard() {
       const camp: Campaign = await api(`/campaigns/${id}`);
       setSelected(camp);
       setForm(camp);
+      if (camp.state === 'scheduled' && camp.scheduled_at && new Date(camp.scheduled_at).getTime() > Date.now()) {
+        setScheduledStartLocal(localDateTimeValue(new Date(camp.scheduled_at)));
+      } else {
+        setScheduledStartLocal('');
+      }
       loadRecipients(id);
     } catch (e: any) {
       notify(e.message, true);
@@ -690,23 +701,36 @@ function Dashboard() {
     }
   };
 
-  const handleScheduleCampaign = async () => {
+  const scheduleCampaign = async (scheduledAt: Date, deferred: boolean) => {
     if (!selected) return;
     try {
       await api(`/campaigns/${selected.id}/schedule`, {
         method: 'POST',
         body: JSON.stringify({
-          scheduled_at: new Date().toISOString(),
+          scheduled_at: scheduledAt.toISOString(),
           confirm_guardrail_override: false,
         }),
       });
-      notify('Campaign scheduled and launched!');
+      notify(deferred ? `Campaign scheduled for ${scheduledAt.toLocaleString()}.` : 'Campaign launched!');
       loadSelectedCampaign(selected.id);
       loadCampaigns();
       loadCampaignStatuses();
     } catch (e: any) {
       notify(e.message, true);
     }
+  };
+
+  const handleScheduleCampaign = async () => {
+    if (!scheduledStartLocal) {
+      await scheduleCampaign(new Date(), false);
+      return;
+    }
+    const scheduledAt = new Date(scheduledStartLocal);
+    if (Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
+      notify('The scheduled start must be in the future.', true);
+      return;
+    }
+    await scheduleCampaign(scheduledAt, true);
   };
 
   const handleControlCampaign = async (action: string) => {
@@ -755,6 +779,11 @@ function Dashboard() {
   const sentCount = eventCounts['sent'] || 0;
   const progressPercent =
     totalRecipients > 0 ? Math.round((sentCount / totalRecipients) * 100) : 0;
+  const isFutureScheduled = Boolean(
+    selected?.state === 'scheduled'
+    && selected.scheduled_at
+    && new Date(selected.scheduled_at).getTime() > Date.now()
+  );
 
   return (
     <main>
@@ -1020,9 +1049,6 @@ function Dashboard() {
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  {selected.state === 'draft' && (
-                    <button onClick={handleScheduleCampaign}>🚀 Launch Campaign</button>
-                  )}
                   {selected.state === 'sending' && (
                     <button className="secondary" onClick={() => handleControlCampaign('pause')}>
                       ⏸ Pause
@@ -1579,12 +1605,27 @@ function Dashboard() {
                   </div>
 
                   <div className="card">
-                    <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>🚀 Launch Campaign</h3>
+                    <h3 style={{ margin: '0 0 12px', fontSize: '1rem' }}>🚀 Launch or Schedule Campaign</h3>
                     <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#5e6b62' }}>
-                      Runs preflight validation again, then schedules the campaign for immediate delivery.
+                      Runs preflight validation again, then starts immediately or waits until your selected local date and time.
                     </p>
-                    {selected.state === 'draft' ? (
-                      <button onClick={handleScheduleCampaign}>🚀 Launch Campaign</button>
+                    {selected.state === 'draft' || isFutureScheduled ? (
+                      <div style={{ display: 'grid', gap: '12px', maxWidth: '460px' }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label htmlFor="scheduled-start">Start date and time (optional, your local timezone)</label>
+                          <input
+                            id="scheduled-start"
+                            type="datetime-local"
+                            min={localDateTimeValue(new Date())}
+                            value={scheduledStartLocal}
+                            onChange={(event) => setScheduledStartLocal(event.target.value)}
+                          />
+                          <small style={{ color: '#5e6b62' }}>
+                            Leave empty to start immediately. A future date schedules the campaign automatically.
+                          </small>
+                        </div>
+                        <button onClick={handleScheduleCampaign}>🚀 Launch Campaign</button>
+                      </div>
                     ) : (
                       <p style={{ margin: 0, fontSize: '0.85rem', color: '#5e6b62' }}>
                         This campaign is currently <strong>{selected.state}</strong>. Duplicate it to start a new campaign from these settings.

@@ -196,7 +196,7 @@ In the **📝 Setup & Template** tab:
    - ✅ Total message sizes comply with profile limits.
    - ✅ Daily sending caps are not exceeded.
    - ✅ Marketing consent and suppression list requirements are met (for marketing campaigns).
-3. Once passed, click **🚀 Launch Campaign**.
+3. Once passed, optionally choose a **Start date and time**, then click **Launch Campaign**. Leaving it empty starts immediately; a future value schedules the campaign in your browser's local timezone. Deferred campaigns remain editable until sending begins.
 4. Monitor live delivery counts (Sent, Pending, Failed, Retry) and real-time progress bars via Server-Sent Events (SSE).
 
 ---
