@@ -118,10 +118,6 @@ def process_campaign(campaign_id: str) -> None:
                     recipient.status = "sent"
                     recipient.message_id = message["Message-ID"]
                     recipient.sent_at = datetime.now(timezone.utc)
-                    recipient.rendered_subject = rendered.subject
-                    recipient.rendered_markdown = (
-                        rendered.source if campaign.body_mode == "markdown" else rendered.text
-                    )
                     db.add(DeliveryAttempt(recipient_id=recipient.id, outcome="sent"))
                 except Exception as exc:
                     kind, code = classify_smtp_error(exc)

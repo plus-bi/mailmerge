@@ -72,8 +72,6 @@ def test_worker_records_delivery_failure_and_marks_campaign_failed(test_db_sessi
     assert test_db_session.get(Campaign, campaign.id).state == CampaignState.failed
     failed_recipient = test_db_session.get(Recipient, recipient.id)
     assert failed_recipient.status == "failed"
-    assert failed_recipient.rendered_subject is None
-    assert failed_recipient.rendered_markdown is None
     attempt = test_db_session.query(DeliveryAttempt).filter_by(recipient_id=recipient.id).one()
     assert attempt.outcome == "permanent"
     assert attempt.detail == "SMTP test failure"
@@ -110,6 +108,6 @@ def test_worker_completes_when_all_sendable_recipients_are_sent(test_db_session,
     assert test_db_session.get(Campaign, campaign.id).state == CampaignState.completed
     sent_recipient = test_db_session.get(Recipient, valid.id)
     assert sent_recipient.status == "sent"
-    assert sent_recipient.rendered_subject == "Hello Valid"
-    assert sent_recipient.rendered_markdown == "Hi **Valid**"
+    assert not hasattr(sent_recipient, "rendered_subject")
+    assert not hasattr(sent_recipient, "rendered_markdown")
     assert test_db_session.get(Recipient, excluded.id).status == "pending"

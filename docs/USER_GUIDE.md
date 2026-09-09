@@ -56,15 +56,15 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
 
 ### Step 1: Configure Sender Profile & Campaign Details
 
-1. Click **"+ New Profile"** in the header to open the sender profile manager.
+1. Click **"Profiles"** in the header to open the sender profile manager.
 2. Create a profile by entering the SMTP server, authentication, and sending-limit settings, then click **Save profile**. The credential is stored in the OS keychain; the remaining settings are saved to the configured TOML file or the app-managed `profiles.toml` in its data directory.
 3. Use **Load TOML** to import and activate an existing `[[profiles]]` file. Use **Download TOML** to save a credential-free backup.
 4. Select an existing campaign or click **"+ New Campaign"**.
 5. Under the **📝 Setup & Template** tab:
    - **Campaign Name**: e.g. `Q3 Community Update`.
    - **Sender Profile**: Select your configured SMTP profile (e.g. `LRZ`, `Postmark`, `Gmail/Workspace`).
-   - **From Name**: The display name visible in the recipient's email client (e.g., `Alice from Acme`).
-   - **From Address**: The sender email (e.g., `alice@yourdomain.com`).
+   - **From Name**: Populated from the selected sender profile; the display name visible in the recipient's email client (e.g., `Alice from Acme`).
+   - **From Address**: Populated from the selected sender profile; the sender email (e.g., `alice@yourdomain.com`).
    - **Reply-To Address**: Set a dedicated reply address if you want responses routed to a different inbox (e.g., `replies@yourdomain.com`).
    - **Body Mode**: Choose between `Markdown` (recommended) or raw `HTML`.
 

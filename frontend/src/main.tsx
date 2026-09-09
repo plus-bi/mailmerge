@@ -794,7 +794,7 @@ function Dashboard() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <button onClick={handleCreateCampaign}>+ New Campaign</button>
-          <button className="secondary" onClick={openNewProfile}>+ New Profile</button>
+          <button className="secondary" onClick={openNewProfile}>Profiles</button>
           <UserButton />
         </div>
       </header>
@@ -1000,7 +1000,13 @@ function Dashboard() {
                       type="button"
                       className="secondary"
                       onClick={() => {
-                        setForm({ ...form, profile_id: editingProfileId });
+                        const profile = profiles.find((item) => item.id === editingProfileId);
+                        setForm({
+                          ...form,
+                          profile_id: editingProfileId,
+                          from_name: profile?.from_name ?? '',
+                          from_address: profile?.from_address ?? '',
+                        });
                         setProfileManagerOpen(false);
                         notify('Sender profile selected. Save the campaign to keep this selection.');
                       }}
@@ -1177,8 +1183,8 @@ function Dashboard() {
                           setForm((prev) => ({
                             ...prev,
                             profile_id: selectedPid,
-                            from_name: prev.from_name || (prof?.from_name ?? ''),
-                            from_address: prev.from_address || (prof?.from_address ?? ''),
+                            from_name: prof?.from_name ?? '',
+                            from_address: prof?.from_address ?? '',
                             reply_to: prev.reply_to || (prof?.reply_to ?? ''),
                           }));
                         }}

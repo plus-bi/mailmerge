@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -45,8 +45,6 @@ def init_db() -> None:
             ("campaigns", "unsubscribe_base_url", "VARCHAR(500)"),
             ("campaigns", "from_name", "VARCHAR(200) DEFAULT ''"),
             ("campaigns", "from_address", "VARCHAR(320) DEFAULT ''"),
-            ("recipients", "rendered_subject", "TEXT"),
-            ("recipients", "rendered_markdown", "TEXT"),
             ("unsubscribe_events", "campaign_id", "VARCHAR"),
         ]:
             try:
@@ -54,6 +52,17 @@ def init_db() -> None:
                 conn.commit()
             except Exception:
                 pass
+
+        # Personalized messages are derived from the campaign template and the
+        # recipient values at send/preview time. Older releases retained two
+        # duplicate rendered-text columns per recipient; remove both the data
+        # and columns during startup migration.
+        if engine.dialect.name == "sqlite":
+            recipient_columns = {column["name"] for column in inspect(conn).get_columns("recipients")}
+            for column in ("rendered_subject", "rendered_markdown"):
+                if column in recipient_columns:
+                    conn.execute(text(f"ALTER TABLE recipients DROP COLUMN {column}"))
+            conn.commit()
 
         conn.execute(
             text(

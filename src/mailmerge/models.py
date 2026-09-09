@@ -98,8 +98,6 @@ class Recipient(Base):
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     message_id: Mapped[str | None] = mapped_column(String(255))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    rendered_subject: Mapped[str | None] = mapped_column(Text)
-    rendered_markdown: Mapped[str | None] = mapped_column(Text)
 
 
 class Attachment(Base):
