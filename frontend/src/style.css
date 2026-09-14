@@ -249,6 +249,7 @@ textarea.code {
 .badge-sending { background: #cff4fc; color: #055160; }
 .badge-completed { background: #d1e7dd; color: #0f5132; }
 .badge-paused { background: #fff3cd; color: #664d03; }
+.badge-awaiting_confirmation { background: #fff3cd; color: #664d03; }
 .badge-failed { background: #f8d7da; color: #842029; }
 .badge-valid { background: #d1e7dd; color: #0f5132; }
 .badge-invalid { background: #f8d7da; color: #842029; }

@@ -1124,6 +1124,14 @@ function Dashboard() {
                   {selected.state === 'paused' && (
                     <button onClick={() => handleControlCampaign('resume')}>▶ Resume</button>
                   )}
+                  {selected.state === 'awaiting_confirmation' && (
+                    <button
+                      onClick={() => handleControlCampaign('confirm-overdue')}
+                      title="Confirm the delayed start and begin sending now"
+                    >
+                      ▶ Confirm & start now
+                    </button>
+                  )}
                   {(selected.state === 'sending' || selected.state === 'scheduled') && (
                     <button className="danger" onClick={() => handleControlCampaign('cancel')}>
                       ✕ Cancel
