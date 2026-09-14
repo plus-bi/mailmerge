@@ -19,30 +19,52 @@ from .smtp import AuthenticationFailure, classify_smtp_error, connect, send
 RETRY_DELAYS = (60, 300, 900)
 
 
-def is_within_working_hours(campaign: Campaign, profile: Profile | None, now_utc: datetime | None = None) -> bool:
-    enabled = campaign.working_hours_enabled or (profile.working_hours_enabled if profile else False)
-    if not enabled:
-        return True
-
+def _dispatch_timezone(campaign: Campaign, profile: Profile | None) -> ZoneInfo:
     tz_name = campaign.working_hours_timezone or (profile.working_hours_timezone if profile else "UTC") or "UTC"
-    start_hour = campaign.working_hours_start if campaign.working_hours_start is not None else (profile.working_hours_start if profile else 9)
-    end_hour = campaign.working_hours_end if campaign.working_hours_end is not None else (profile.working_hours_end if profile else 17)
-
     try:
-        tz = ZoneInfo(tz_name)
+        return ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("UTC")
+        return ZoneInfo("UTC")
 
-    current_local = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
 
-    # Monday is 0, Sunday is 6
-    if current_local.weekday() >= 5:
+def _window_hours(campaign: Campaign, profile: Profile | None) -> tuple[int, int]:
+    return campaign.working_hours_start, campaign.working_hours_end
+
+
+def is_within_working_hours(campaign: Campaign, profile: Profile | None, now_utc: datetime | None = None) -> bool:
+    """Whether now is inside the configured daily dispatch window (every day)."""
+    tz = _dispatch_timezone(campaign, profile)
+    start_hour, end_hour = _window_hours(campaign, profile)
+    if start_hour >= end_hour:
         return False
 
-    if start_hour <= end_hour:
-        return start_hour <= current_local.hour < end_hour
-    else:
-        return current_local.hour >= start_hour or current_local.hour < end_hour
+    current_local = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
+    return start_hour <= current_local.hour < end_hour
+
+
+def next_dispatch_start(campaign: Campaign, profile: Profile, now_utc: datetime | None = None) -> datetime:
+    tz = _dispatch_timezone(campaign, profile)
+    start_hour, end_hour = _window_hours(campaign, profile)
+    current = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
+    candidate = current.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if current >= current.replace(hour=end_hour, minute=0, second=0, microsecond=0):
+        candidate += timedelta(days=1)
+    elif current >= candidate:
+        return current.astimezone(timezone.utc)
+    return candidate.astimezone(timezone.utc)
+
+
+def sent_today(db, profile: Profile, campaign: Campaign, now_utc: datetime | None = None) -> int:
+    tz = _dispatch_timezone(campaign, profile)
+    current = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
+    start = current.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    end = start + timedelta(days=1)
+    return db.scalar(
+        select(func.count()).select_from(DeliveryAttempt)
+        .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
+        .join(Campaign, Recipient.campaign_id == Campaign.id)
+        .where(Campaign.profile_id == profile.id, DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at < end)
+    ) or 0
 
 
 def process_campaign(campaign_id: str) -> None:
@@ -79,13 +101,26 @@ def process_campaign(campaign_id: str) -> None:
                 )
             ).all()
 
-            effective_delay = campaign.delay_seconds if campaign.delay_seconds is not None else profile.delay_seconds
+            effective_delay = campaign.delay_seconds if campaign.delay_seconds is not None else 2
 
             for recipient in recipients:
                 db.refresh(campaign)
                 if campaign.state != CampaignState.sending:
                     break
                 if not is_within_working_hours(campaign, profile):
+                    campaign.state = CampaignState.scheduled
+                    campaign.scheduled_at = next_dispatch_start(campaign, profile)
+                    db.commit()
+                    break
+                if sent_today(db, profile, campaign) >= profile.daily_cap:
+                    tz = _dispatch_timezone(campaign, profile)
+                    start_hour, _ = _window_hours(campaign, profile)
+                    tomorrow = (datetime.now(timezone.utc).astimezone(tz) + timedelta(days=1)).replace(
+                        hour=start_hour, minute=0, second=0, microsecond=0
+                    )
+                    campaign.state = CampaignState.scheduled
+                    campaign.scheduled_at = tomorrow.astimezone(timezone.utc)
+                    db.commit()
                     break
 
                 attempts = db.scalar(
@@ -180,13 +215,15 @@ def process_campaign(campaign_id: str) -> None:
 def tick() -> None:
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        campaigns = db.scalars(select(Campaign).where(Campaign.state == CampaignState.scheduled)).all()
+        campaigns = db.scalars(select(Campaign).where(Campaign.state.in_([CampaignState.scheduled, CampaignState.sending]))).all()
         due = []
         for campaign in campaigns:
             scheduled = campaign.scheduled_at
             if scheduled and scheduled.tzinfo is None:
                 scheduled = scheduled.replace(tzinfo=timezone.utc)
-            if scheduled and scheduled < now - timedelta(minutes=5):
+            if campaign.state == CampaignState.sending:
+                due.append(campaign.id)
+            elif scheduled and scheduled < now - timedelta(minutes=5):
                 campaign.state = CampaignState.awaiting_confirmation
                 db.add(AuditLog(campaign_id=campaign.id, action="overdue"))
             elif not scheduled or scheduled <= now:

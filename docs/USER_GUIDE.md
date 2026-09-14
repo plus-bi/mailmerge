@@ -14,7 +14,7 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
    - [Step 3: Ingesting Recipients via JSON](#step-3-ingesting-recipients-via-json)
    - [Step 4: Live Previews & Variable Inspection](#step-4-live-previews--variable-inspection)
    - [Step 5: Sending Test Emails](#step-5-sending-test-emails)
-   - [Step 6: Daytime Delivery Pacing & Working Hours](#step-6-daytime-delivery-pacing--working-hours)
+   - [Step 6: Dispatch Window and Daily Pacing](#step-6-dispatch-window-and-daily-pacing)
    - [Step 7: Preflight Check & Launch](#step-7-preflight-check--launch)
 4. [Unsubscribe & Suppression List Management](#unsubscribe--suppression-list-management)
 5. [Troubleshooting & FAQ](#troubleshooting--faq)
@@ -27,7 +27,7 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
 - **Strict Template Variable Validation**: Jinja2 AST automatically discovers all undeclared variables in your subject and body templates. Missing variables are flagged before sending to prevent embarrassing placeholder errors (e.g., `Hello {{ first_name }}`).
 - **Live Per-Recipient Previews**: Interactive preview browser to inspect the rendered HTML and plain-text versions for any recipient alongside their raw JSON values.
 - **Test Email Dispatch**: Send a live test email with prefix `[TEST]` to your inbox with a single click.
-- **Daytime Delivery Pacing & Working Hours Guardrails**: Configure inter-message delays (e.g., 144 seconds) and restrict delivery exclusively to business hours (e.g., Mon–Fri, 09:00–17:00 in your preferred timezone). The background worker automatically pauses outside active hours.
+- **Dispatch Window & Daily Pacing**: Configure inter-message delays and a daily start/end window in your timezone. The worker pauses outside that window and rolls remaining recipients into the next day's window once the daily cap is reached.
 - **Unsubscribe Suppression Management**: Integrates with an RFC 8058-compliant unsubscribe microservice and lets an operator review and manually sync opt-outs into the suppression database.
 - **Privacy & Security First**: Credentials are stored in the OS Secret Service / Keyring; no tracking pixels or URL rewrite cookies are injected.
 
@@ -168,7 +168,7 @@ Before sending to your full recipient list, send a live preview to your personal
 
 ---
 
-### Step 6: Daytime Delivery Pacing & Working Hours
+### Step 6: Dispatch Window and Daily Pacing
 
 In the **📝 Setup & Template** tab:
 
@@ -176,14 +176,14 @@ In the **📝 Setup & Template** tab:
    - To spread **200 emails across an 8-hour workday**:
      $$\text{Delay} = \frac{8 \times 3600 \text{ seconds}}{200} = 144 \text{ seconds}$$
    - Set **Delay Between Emails** to `144`.
-2. **Working Hours Restriction**:
-   - Check **"Restricted to Working Hours"**.
-   - **Start Hour**: `9` (09:00 local time).
-   - **End Hour**: `17` (17:00 local time).
+2. **Dispatch Window**:
+   - Set the **Start time** to `09:00` local time.
+   - Set the **End time** to `17:00` local time.
    - **Timezone**: e.g., `Europe/Berlin`, `America/New_York`, `UTC`.
 3. **Behavior**:
-   - Dispatch runs only Monday through Friday between start and end hours.
-   - If the clock passes the end hour or enters the weekend, the worker pauses delivery and automatically resumes at 09:00 on the next business day.
+   - Dispatch runs only between the configured times, every day.
+   - If the clock passes the end time, or the daily cap is reached, the worker automatically resumes at the next day's start time.
+   - Preflight checks that the number due that day fits in the window at the configured delay.
 
 ---
 

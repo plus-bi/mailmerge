@@ -22,7 +22,6 @@ type Profile = {
   username: string | null;
   auth_type: string;
   daily_cap: number;
-  delay_seconds: number;
   max_message_bytes: number;
   reply_to: string | null;
   list_unsubscribe?: string | null;
@@ -50,7 +49,6 @@ const blankProfile = (): ProfileDraft => ({
   auth_type: 'password',
   password: '',
   daily_cap: 250,
-  delay_seconds: 2,
   max_message_bytes: 20000000,
   reply_to: '',
   working_hours_enabled: false,
@@ -74,7 +72,6 @@ const profileToDraft = (profile: Profile): ProfileDraft => ({
   auth_type: profile.auth_type,
   password: '',
   daily_cap: profile.daily_cap,
-  delay_seconds: profile.delay_seconds,
   max_message_bytes: profile.max_message_bytes,
   reply_to: profile.reply_to ?? '',
   working_hours_enabled: profile.working_hours_enabled,
@@ -941,10 +938,6 @@ function Dashboard() {
                       <input id="profile-daily-cap" type="number" min={1} value={profileForm.daily_cap} onChange={(e) => setProfileForm({ ...profileForm, daily_cap: Number(e.target.value) })} />
                     </div>
                     <div className="form-group">
-                      <label htmlFor="profile-delay">Delay between messages (seconds)</label>
-                      <input id="profile-delay" type="number" min={0} value={profileForm.delay_seconds} onChange={(e) => setProfileForm({ ...profileForm, delay_seconds: Number(e.target.value) })} />
-                    </div>
-                    <div className="form-group">
                       <label htmlFor="profile-size">Maximum message size (bytes)</label>
                       <input id="profile-size" type="number" min={1024} value={profileForm.max_message_bytes} onChange={(e) => setProfileForm({ ...profileForm, max_message_bytes: Number(e.target.value) })} />
                     </div>
@@ -1311,39 +1304,29 @@ function Dashboard() {
                         />
                       </div>
                       <div className="form-group full">
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={form.working_hours_enabled || false}
-                            onChange={(e) => setForm({ ...form, working_hours_enabled: e.target.checked })}
-                          />
-                          Restricted to Working Hours (Monday – Friday only)
-                        </label>
+                        <strong>Dispatch window</strong>
+                        <small style={{ display: 'block', color: '#5e6b62', marginTop: '4px' }}>Emails are sent only between these times, every day.</small>
                       </div>
-                      {form.working_hours_enabled && (
-                        <>
+                      <>
                           <div className="form-group">
-                            <label>Start Hour (0–23)</label>
+                            <label>Start time</label>
                             <input
-                              type="number"
-                              min={0}
-                              max={23}
-                              value={form.working_hours_start ?? 9}
-                              onChange={(e) => setForm({ ...form, working_hours_start: parseInt(e.target.value) })}
+                              type="time"
+                              step="3600"
+                              value={`${String(form.working_hours_start ?? 9).padStart(2, '0')}:00`}
+                              onChange={(e) => setForm({ ...form, working_hours_start: parseInt(e.target.value.slice(0, 2)) })}
                             />
                           </div>
                           <div className="form-group">
-                            <label>End Hour (0–23)</label>
+                            <label>End time</label>
                             <input
-                              type="number"
-                              min={0}
-                              max={23}
-                              value={form.working_hours_end ?? 17}
-                              onChange={(e) => setForm({ ...form, working_hours_end: parseInt(e.target.value) })}
+                              type="time"
+                              step="3600"
+                              value={`${String(form.working_hours_end ?? 17).padStart(2, '0')}:00`}
+                              onChange={(e) => setForm({ ...form, working_hours_end: parseInt(e.target.value.slice(0, 2)) })}
                             />
                           </div>
-                        </>
-                      )}
+                      </>
                     </div>
                   </div>
 

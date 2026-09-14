@@ -24,6 +24,7 @@ from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
 from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent
+from .worker import _dispatch_timezone, _window_hours, sent_today
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
 from .secrets import get_secret, set_secret
@@ -620,12 +621,30 @@ def preflight(campaign: Campaign, db: Session) -> dict:
         if not campaign.list_unsubscribe_enabled and not campaign.unsubscribe_base_url:
             errors.append("list-unsubscribe must be enabled for marketing campaigns")
 
+    capacity: dict[str, int] | None = None
+    if profile:
+        start_hour, end_hour = _window_hours(campaign, profile)
+        delay = campaign.delay_seconds if campaign.delay_seconds is not None else 2
+        local_now = datetime.now(timezone.utc).astimezone(_dispatch_timezone(campaign, profile))
+        window_end = local_now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+        within_window = start_hour <= local_now.hour < end_hour
+        window_seconds = int((window_end - local_now).total_seconds()) if within_window else max(0, end_hour - start_hour) * 3600
+        window_capacity = profile.daily_cap if delay == 0 else (window_seconds + delay - 1) // delay
+        sent = sent_today(db, profile, campaign)
+        today_target = min(len(previews), max(0, profile.daily_cap - sent))
+        capacity = {"daily_limit": profile.daily_cap, "already_sent_today": sent, "today_target": today_target, "window_capacity": window_capacity}
+        if start_hour >= end_hour:
+            errors.append("dispatch window end time must be after its start time")
+        elif window_capacity < today_target:
+            errors.append(f"dispatch window fits only {window_capacity} emails at the configured delay, but {today_target} are due today")
+
     return {
         "ok": not errors,
         "errors": errors,
         "previews": previews,
         "excluded": len(recipients) - len(previews),
         "attachments": [{"name": a.filename, "size": a.size} for a in campaign.attachments],
+        "capacity": capacity,
     }
 
 
@@ -820,20 +839,9 @@ def schedule(campaign_id: str, data: ScheduleIn, db: Session = Depends(get_db)):
         raise HTTPException(409, detail=result["errors"])
     profile = db.get(Profile, campaign.profile_id)
     count = len(result["previews"])
-    sent_24h = (
-        db.scalar(
-            select(func.count())
-            .select_from(DeliveryAttempt)
-            .where(
-                DeliveryAttempt.outcome == "sent",
-                DeliveryAttempt.attempted_at >= datetime.now(timezone.utc) - timedelta(hours=24),
-            )
-        )
-        or 0
-    )
-    if sent_24h + count > profile.daily_cap and not data.confirm_guardrail_override:
-        raise HTTPException(409, "rolling daily cap exceeded; explicit override confirmation required")
-    campaign.guardrail_override = sent_24h + count > profile.daily_cap
+    # The worker dispatches up to the profile cap each local day and rolls any
+    # remaining recipients into the next dispatch window.
+    campaign.guardrail_override = False
     campaign.scheduled_at = data.scheduled_at.astimezone(timezone.utc)
     campaign.state = CampaignState.scheduled
     db.add(

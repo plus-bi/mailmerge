@@ -127,12 +127,12 @@ Database management is handled via SQLAlchemy 2.0 with SQLite in WAL mode:
 The worker (`mailmerge.worker.run`) executes in a dedicated process:
 
 1. **Periodic Tick (`worker.tick()`)**:
-   - Queries `Campaigns` where `state == CampaignState.scheduled`.
+   - Queries scheduled campaigns and campaigns that need to resume in a later dispatch window.
    - Checks if `scheduled_at` is due (or overdue >5 min -> `awaiting_confirmation`).
    - For each due campaign, calls `process_campaign(campaign_id)`.
 
 2. **Campaign Processing (`worker.process_campaign()`)**:
-   - Checks **Working Hours Window** (`is_within_working_hours`). If outside active hours (e.g. night or weekend), yields execution until next window.
+   - Checks the daily **Dispatch Window**. If outside it, or the profile's daily cap is reached, reschedules the remaining recipients for the next day's start time.
    - Connects to SMTP and authenticates using stored credentials from Keyring.
    - Iterates through sendable recipients (`included`, `valid`, `~suppressed`, `status IN ('pending', 'retry')`).
    - Renders message with Jinja2 sandbox and builds MIME payload.

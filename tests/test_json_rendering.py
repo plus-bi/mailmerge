@@ -134,9 +134,9 @@ def test_working_hours_guardrail():
     wed_8pm = datetime(2026, 8, 26, 20, 0, 0, tzinfo=timezone.utc)
     assert is_within_working_hours(campaign, None, now_utc=wed_8pm) is False
 
-    # Saturday at 12:00 UTC -> weekend outside
+    # Saturday is still inside: the dispatch window applies every day.
     sat_noon = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
-    assert is_within_working_hours(campaign, None, now_utc=sat_noon) is False
+    assert is_within_working_hours(campaign, None, now_utc=sat_noon) is True
 
 
 @pytest.mark.parametrize("value", ["a@b.example", "first.last+tag@example.com"])

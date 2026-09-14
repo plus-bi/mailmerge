@@ -136,6 +136,29 @@ def test_api_json_recipient_import_and_preflight(client, test_db_session):
     assert get_res.status_code == 404
 
 
+def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):
+    profile = Profile(name="Limited", smtp_host="localhost", smtp_port=1025, security="none", daily_cap=10, delay_seconds=3600)
+    test_db_session.add(profile)
+    test_db_session.flush()
+    campaign = Campaign(
+        name="Window check", profile_id=profile.id, from_address="sender@example.com",
+        subject_template="Hello", body_template="Hi", delay_seconds=3600, working_hours_start=9, working_hours_end=10,
+    )
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    test_db_session.add_all([
+        Recipient(campaign_id=campaign.id, email="one@example.com", normalized_email="one@example.com"),
+        Recipient(campaign_id=campaign.id, email="two@example.com", normalized_email="two@example.com"),
+    ])
+    test_db_session.commit()
+
+    result = preflight(campaign, test_db_session)
+
+    assert result["ok"] is False
+    assert result["capacity"]["window_capacity"] == 1
+    assert any("dispatch window fits only 1 emails" in error for error in result["errors"])
+
+
 def test_campaign_statuses_only_include_launched_campaigns(test_db_session):
     draft = Campaign(name="Draft", state=CampaignState.draft)
     launched = Campaign(
