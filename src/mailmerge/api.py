@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from jinja2 import TemplateError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -188,6 +188,13 @@ class RecipientOut(ORMModel):
     thread_references: list[str]
     exclusion_reason: str | None
     sent_at: datetime | None
+
+    @field_validator("thread_references", mode="before")
+    @classmethod
+    def normalize_missing_thread_references(cls, value: Any) -> list[str]:
+        # Defensive compatibility for a database initialized by an older
+        # release before its startup migration has completed.
+        return [] if value is None else value
 
 
 class RecipientInclusionIn(BaseModel):

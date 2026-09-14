@@ -13,6 +13,7 @@ from mailmerge.api import (
     DuplicateCampaignIn,
     GenerateTokenIn,
     ProfileConnectionTestIn,
+    RecipientOut,
     TestEmailIn as ApiTestEmailIn,
     campaign_statuses,
     create_follow_up_campaign,
@@ -164,6 +165,18 @@ def test_duplicate_recipient_import_is_rejected_without_replacing_existing_recip
     assert "1 duplicate email" in raised.value.detail
     assert "DUPLICATE@example.com" in raised.value.detail
     assert test_db_session.query(Recipient).filter_by(campaign_id=campaign.id).one().email == "existing@example.com"
+
+
+def test_legacy_recipient_without_thread_references_has_a_safe_api_representation():
+    recipient = RecipientOut.model_validate({
+        "id": "legacy", "campaign_id": "campaign", "email": "legacy@example.com",
+        "normalized_email": "legacy@example.com", "values": {}, "included": True,
+        "valid": True, "validation_error": None, "suppressed": False, "status": "pending",
+        "message_id": None, "reply_to_message_id": None, "source_recipient_id": None,
+        "thread_references": None, "exclusion_reason": None, "sent_at": None,
+    })
+
+    assert recipient.thread_references == []
 
 
 def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):

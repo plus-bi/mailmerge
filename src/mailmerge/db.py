@@ -77,4 +77,9 @@ def init_db() -> None:
             ),
             {"new_url": "https://unsub.plus.bi", "old_url": "https://mailmerge.plus.bi"},
         )
+        # Follow-up threading was introduced after recipients already existed.
+        # SQLite adds the JSON column as NULL for those rows, while the API
+        # contract correctly exposes a list. Normalize them during startup so
+        # loading an older campaign cannot fail response validation.
+        conn.execute(text("UPDATE recipients SET thread_references = '[]' WHERE thread_references IS NULL"))
         conn.commit()
