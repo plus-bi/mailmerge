@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -104,6 +104,12 @@ class Recipient(Base):
     thread_references: Mapped[list[str]] = mapped_column(JSON, default=list)
     exclusion_reason: Mapped[str | None] = mapped_column(Text)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def recipient_domain_ordering():
+    """Sort email recipients by domain, then local part, consistently."""
+    domain = func.substr(Recipient.normalized_email, func.instr(Recipient.normalized_email, "@") + 1)
+    return domain, Recipient.normalized_email
 
 
 class Attachment(Base):

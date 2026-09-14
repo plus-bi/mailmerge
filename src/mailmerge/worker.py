@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from .config import settings
 from .db import SessionLocal, init_db
 from .messages import build_message
-from .models import AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient
+from .models import AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, recipient_domain_ordering
 from .profile_config import load_profiles
 from .rendering import render_message, templates_for_unsubscribe_setting
 from .secrets import get_secret
@@ -98,7 +98,7 @@ def process_campaign(campaign_id: str) -> None:
                     Recipient.valid,
                     ~Recipient.suppressed,
                     Recipient.status.in_(["pending", "retry"]),
-                )
+                ).order_by(*recipient_domain_ordering())
             ).all()
 
             effective_delay = campaign.delay_seconds if campaign.delay_seconds is not None else 2

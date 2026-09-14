@@ -23,7 +23,7 @@ from .config import settings
 from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
-from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent
+from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
 from .worker import _dispatch_timezone, _window_hours, sent_today
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
@@ -476,7 +476,9 @@ def create_follow_up_campaign(campaign_id: str, db: Session = Depends(get_db)):
     if source.state != CampaignState.completed:
         raise HTTPException(409, "follow-up campaigns can only be created from completed campaigns")
     source_recipients = db.scalars(
-        select(Recipient).where(Recipient.campaign_id == source.id, Recipient.status == "sent", Recipient.message_id.is_not(None))
+        select(Recipient)
+        .where(Recipient.campaign_id == source.id, Recipient.status == "sent", Recipient.message_id.is_not(None))
+        .order_by(*recipient_domain_ordering())
     ).all()
     if not source_recipients:
         raise HTTPException(409, "the completed campaign has no successfully sent recipients to follow up")
@@ -527,7 +529,9 @@ def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
 @router.get("/campaigns/{campaign_id}/recipients", response_model=list[RecipientOut])
 def get_recipients(campaign_id: str, db: Session = Depends(get_db)):
     _campaign(db, campaign_id)
-    return db.scalars(select(Recipient).where(Recipient.campaign_id == campaign_id).order_by(Recipient.id)).all()
+    return db.scalars(
+        select(Recipient).where(Recipient.campaign_id == campaign_id).order_by(*recipient_domain_ordering())
+    ).all()
 
 
 @router.put("/campaigns/{campaign_id}/recipients/{recipient_id}", response_model=RecipientOut)
@@ -647,7 +651,9 @@ def preflight(campaign: Campaign, db: Session) -> dict:
     if not campaign.profile_id:
         errors.append("sender profile is required")
     profile = db.get(Profile, campaign.profile_id) if campaign.profile_id else None
-    recipients = db.scalars(select(Recipient).where(Recipient.campaign_id == campaign.id)).all()
+    recipients = db.scalars(
+        select(Recipient).where(Recipient.campaign_id == campaign.id).order_by(*recipient_domain_ordering())
+    ).all()
     subject_template, body_template = templates_for_unsubscribe_setting(
         campaign.subject_template,
         campaign.body_template,
@@ -870,7 +876,7 @@ def send_test_email(campaign_id: str, data: TestEmailIn, db: Session = Depends(g
         sample_recipient = db.get(Recipient, data.sample_recipient_id)
     if not sample_recipient:
         sample_recipient = db.scalar(
-            select(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.valid).order_by(Recipient.id)
+            select(Recipient).where(Recipient.campaign_id == campaign.id, Recipient.valid).order_by(*recipient_domain_ordering())
         )
 
     values = dict(sample_recipient.values) if sample_recipient else {}

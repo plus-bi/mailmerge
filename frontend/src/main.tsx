@@ -1595,7 +1595,7 @@ function Dashboard() {
 
                   {previewContent ? (
                     <div className="preview-container">
-                      <div>
+                      <div className="preview-recipient-values">
                         <h4>Recipient Values</h4>
                         <pre style={{ background: '#f4f6f3', padding: '12px', borderRadius: '6px', fontSize: '0.85rem' }}>
                           {JSON.stringify(

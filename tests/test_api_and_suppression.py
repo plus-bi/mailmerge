@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from mailmerge.api import (
@@ -31,7 +31,7 @@ from mailmerge.api import (
 )
 from mailmerge.config import settings
 from mailmerge.db import Base, get_db
-from mailmerge.models import Campaign, Profile, Recipient, CampaignState
+from mailmerge.models import Campaign, Profile, Recipient, CampaignState, recipient_domain_ordering
 from mailmerge.suppression import sync_suppressions
 from fastapi import FastAPI, HTTPException
 
@@ -177,6 +177,24 @@ def test_legacy_recipient_without_thread_references_has_a_safe_api_representatio
     })
 
     assert recipient.thread_references == []
+
+
+def test_recipients_sort_by_domain_then_local_part(test_db_session):
+    campaign = Campaign(name="Recipient order")
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    test_db_session.add_all([
+        Recipient(campaign_id=campaign.id, email="zoe@bravo.example", normalized_email="zoe@bravo.example"),
+        Recipient(campaign_id=campaign.id, email="amy@alpha.example", normalized_email="amy@alpha.example"),
+        Recipient(campaign_id=campaign.id, email="bob@alpha.example", normalized_email="bob@alpha.example"),
+    ])
+    test_db_session.commit()
+
+    emails = test_db_session.scalars(
+        select(Recipient).where(Recipient.campaign_id == campaign.id).order_by(*recipient_domain_ordering())
+    ).all()
+
+    assert [recipient.email for recipient in emails] == ["amy@alpha.example", "bob@alpha.example", "zoe@bravo.example"]
 
 
 def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):
