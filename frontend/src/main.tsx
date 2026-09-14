@@ -88,6 +88,8 @@ type Campaign = {
   name: string;
   purpose: string;
   profile_id: string | null;
+  follow_up_source_id: string | null;
+  is_follow_up: boolean;
   from_name: string;
   from_address: string;
   reply_to: string | null;
@@ -135,6 +137,9 @@ type PreviewData = {
   text: string;
   values: Record<string, any>;
   missing_variables: string[];
+  headers: Record<string, string>;
+  raw_headers: string;
+  mime: { content_type: string; multipart: boolean; attachments: string[] };
 };
 
 type PreflightResult = {
@@ -561,6 +566,18 @@ function Dashboard() {
     }
   };
 
+  const handleCreateFollowUp = async (campaignId: string) => {
+    try {
+      const followUp: Campaign = await api(`/campaigns/${campaignId}/follow-up`, { method: 'POST' });
+      await loadCampaigns();
+      setSelectedId(followUp.id);
+      setActiveTab('template');
+      notify(`Created follow-up with ${followUp.name}. Edit the body, then launch when ready.`);
+    } catch (e: any) {
+      notify(e.message, true);
+    }
+  };
+
   const handleSaveCampaign = async () => {
     if (!selected) return;
     try {
@@ -679,6 +696,17 @@ function Dashboard() {
       });
       await loadRecipients(selected.id);
       notify(`Imported ${result.imported} recipients (${result.valid} valid, ${result.duplicates} duplicates).`);
+    } catch (e: any) {
+      notify(e.message, true);
+    }
+  };
+
+  const setFollowUpRecipientIncluded = async (recipient: Recipient, included: boolean) => {
+    if (!selected) return;
+    try {
+      const exclusion_reason = included ? null : window.prompt('Why exclude this recipient from the follow-up? (optional)');
+      await api(`/campaigns/${selected.id}/recipients/${recipient.id}`, { method: 'PUT', body: JSON.stringify({ included, exclusion_reason }) });
+      await loadRecipients(selected.id);
     } catch (e: any) {
       notify(e.message, true);
     }
@@ -1269,12 +1297,13 @@ function Dashboard() {
 
                   <div className="form-group">
                     <label>Subject Template (Jinja2)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Invitation for {{ first_name }} - {{ company }}"
-                      value={form.subject_template || ''}
-                      onChange={(e) => setForm({ ...form, subject_template: e.target.value })}
-                    />
+                      <input
+                        type="text"
+                        placeholder="e.g. Invitation for {{ first_name }} - {{ company }}"
+                        value={form.subject_template || ''}
+                        disabled={Boolean(selected.follow_up_source_id)}
+                        onChange={(e) => setForm({ ...form, subject_template: e.target.value })}
+                      />
                   </div>
 
                   <div className="form-group">
@@ -1495,6 +1524,7 @@ function Dashboard() {
                         <tr>
                           <th>Email</th>
                           <th>Status</th>
+                          {selected.follow_up_source_id && <th>Follow up</th>}
                           <th>Validity</th>
                           <th>Payload Variables (`values`)</th>
                         </tr>
@@ -1506,6 +1536,11 @@ function Dashboard() {
                             <td>
                               <span className={`badge badge-${r.status}`}>{r.status}</span>
                             </td>
+                            {selected.follow_up_source_id && (
+                              <td>
+                                <label><input type="checkbox" checked={r.included} onChange={(e) => void setFollowUpRecipientIncluded(r, e.target.checked)} /> Include</label>
+                              </td>
+                            )}
                             <td>
                               {r.valid ? (
                                 <span className="badge badge-valid">Valid</span>
@@ -1522,7 +1557,7 @@ function Dashboard() {
                         ))}
                         {recipients.length === 0 && (
                           <tr>
-                            <td colSpan={4} style={{ textAlign: 'center', color: '#888' }}>
+                            <td colSpan={selected.follow_up_source_id ? 5 : 4} style={{ textAlign: 'center', color: '#888' }}>
                               No recipients imported yet.
                             </td>
                           </tr>
@@ -1581,6 +1616,19 @@ function Dashboard() {
                           className="preview-body"
                           dangerouslySetInnerHTML={{ __html: previewContent.html }}
                         />
+                        <details style={{ marginTop: '16px' }}>
+                          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Message headers and MIME details</summary>
+                          <p style={{ fontSize: '0.82rem', color: '#5e6b62' }}>
+                            These are the headers Mailmerge creates before SMTP delivery. SPF, DKIM, and receiving-server headers are added or evaluated downstream and are not available in a local preview.
+                          </p>
+                          <pre style={{ background: '#f4f6f3', padding: '12px', borderRadius: '6px', fontSize: '0.8rem', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+                            {previewContent.raw_headers}
+                          </pre>
+                          <div style={{ fontSize: '0.82rem', color: '#5e6b62' }}>
+                            MIME: <code>{previewContent.mime.content_type}</code> · {previewContent.mime.multipart ? 'multipart' : 'single-part'}
+                            {previewContent.mime.attachments.length > 0 && ` · attachments: ${previewContent.mime.attachments.join(', ')}`}
+                          </div>
+                        </details>
                       </div>
                     </div>
                   ) : (
@@ -1719,6 +1767,15 @@ function Dashboard() {
                                 >
                                   View
                                 </button>
+                                {campaign.state === 'completed' && (
+                                  <button
+                                    className="secondary"
+                                    style={{ padding: '4px 10px', fontSize: '0.8rem', marginLeft: '6px' }}
+                                    onClick={() => void handleCreateFollowUp(campaign.id)}
+                                  >
+                                    Follow up
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           );

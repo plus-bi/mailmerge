@@ -15,6 +15,7 @@ from mailmerge.api import (
     ProfileConnectionTestIn,
     TestEmailIn as ApiTestEmailIn,
     campaign_statuses,
+    create_follow_up_campaign,
     duplicate_campaign,
     generate_campaign_token,
     import_recipients,
@@ -186,6 +187,25 @@ def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_d
     assert result["ok"] is False
     assert result["capacity"]["window_capacity"] == 1
     assert any("dispatch window fits only 1 emails" in error for error in result["errors"])
+
+
+def test_completed_campaign_creates_threaded_follow_up_recipients(test_db_session):
+    source = Campaign(name="Source", state=CampaignState.completed, subject_template="Hello {{ name }}", body_template="Original")
+    test_db_session.add(source)
+    test_db_session.flush()
+    test_db_session.add_all([
+        Recipient(campaign_id=source.id, email="sent@example.com", normalized_email="sent@example.com", values={"name": "Sent"}, status="sent", message_id="<original@example.com>"),
+        Recipient(campaign_id=source.id, email="failed@example.com", normalized_email="failed@example.com", status="failed"),
+    ])
+    test_db_session.commit()
+
+    follow_up = create_follow_up_campaign(source.id, test_db_session)
+    recipients = test_db_session.query(Recipient).filter_by(campaign_id=follow_up.id).all()
+
+    assert follow_up.follow_up_source_id == source.id
+    assert follow_up.subject_template == "Re: Hello {{ name }}"
+    assert len(recipients) == 1
+    assert recipients[0].reply_to_message_id == "<original@example.com>"
 
 
 def test_campaign_statuses_only_include_launched_campaigns(test_db_session):
@@ -379,6 +399,9 @@ def test_preview_suppresses_unsubscribe_line_when_disabled(test_db_session):
     assert "If you prefer" not in preview["text"]
     assert "Hi Reader." in preview["text"]
     assert "Regards" in preview["text"]
+    assert preview["headers"]["To"] == "reader@example.com"
+    assert "From:" in preview["raw_headers"]
+    assert preview["mime"]["multipart"] is True
 
 
 def test_send_test_email_suppresses_unsubscribe_line_when_disabled(test_db_session):

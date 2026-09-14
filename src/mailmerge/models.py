@@ -59,6 +59,8 @@ class Campaign(Base):
     name: Mapped[str] = mapped_column(String(200))
     purpose: Mapped[str] = mapped_column(String(20), default="operational")
     profile_id: Mapped[str | None] = mapped_column(ForeignKey("profiles.id"))
+    follow_up_source_id: Mapped[str | None] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
+    is_follow_up: Mapped[bool] = mapped_column(Boolean, default=False)
     from_name: Mapped[str] = mapped_column(String(200), default="")
     from_address: Mapped[str] = mapped_column(String(320), default="")
     reply_to: Mapped[str | None] = mapped_column(String(320))
@@ -97,6 +99,10 @@ class Recipient(Base):
     suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     message_id: Mapped[str | None] = mapped_column(String(255))
+    reply_to_message_id: Mapped[str | None] = mapped_column(String(255))
+    source_recipient_id: Mapped[str | None] = mapped_column(ForeignKey("recipients.id"), nullable=True)
+    thread_references: Mapped[list[str]] = mapped_column(JSON, default=list)
+    exclusion_reason: Mapped[str | None] = mapped_column(Text)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

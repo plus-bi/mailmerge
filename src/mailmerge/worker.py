@@ -148,7 +148,7 @@ def process_campaign(campaign_id: str) -> None:
                                 raw_base = raw_base.split("/u/", 1)[0]
                             values.setdefault("unsubscribe_url", f"{raw_base.rstrip('/')}/u/{token}")
                     rendered = render_message(subject_template, body_template, campaign.body_mode, values)
-                    message = build_message(campaign, recipient.email, rendered, profile)
+                    message = build_message(campaign, recipient.email, rendered, profile, recipient.reply_to_message_id, recipient.thread_references)
                     send(client, message)
                     recipient.status = "sent"
                     recipient.message_id = message["Message-ID"]

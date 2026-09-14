@@ -45,6 +45,12 @@ def init_db() -> None:
             ("campaigns", "unsubscribe_base_url", "VARCHAR(500)"),
             ("campaigns", "from_name", "VARCHAR(200) DEFAULT ''"),
             ("campaigns", "from_address", "VARCHAR(320) DEFAULT ''"),
+            ("campaigns", "follow_up_source_id", "VARCHAR"),
+            ("campaigns", "is_follow_up", "BOOLEAN DEFAULT 0"),
+            ("recipients", "reply_to_message_id", "VARCHAR(255)"),
+            ("recipients", "source_recipient_id", "VARCHAR"),
+            ("recipients", "thread_references", "JSON"),
+            ("recipients", "exclusion_reason", "TEXT"),
             ("unsubscribe_events", "campaign_id", "VARCHAR"),
         ]:
             try:

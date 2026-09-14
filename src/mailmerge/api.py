@@ -128,6 +128,8 @@ class CampaignOut(ORMModel):
     name: str
     purpose: str
     profile_id: str | None
+    follow_up_source_id: str | None
+    is_follow_up: bool
     from_name: str
     from_address: str
     reply_to: str | None
@@ -181,7 +183,16 @@ class RecipientOut(ORMModel):
     suppressed: bool
     status: str
     message_id: str | None
+    reply_to_message_id: str | None
+    source_recipient_id: str | None
+    thread_references: list[str]
+    exclusion_reason: str | None
     sent_at: datetime | None
+
+
+class RecipientInclusionIn(BaseModel):
+    included: bool
+    exclusion_reason: str | None = None
 
 
 class TestEmailIn(BaseModel):
@@ -425,7 +436,10 @@ def update_campaign(campaign_id: str, data: CampaignIn, db: Session = Depends(ge
     )
     if campaign.state not in {CampaignState.draft, CampaignState.paused, CampaignState.cancelled} and not is_future_scheduled:
         raise HTTPException(409, "campaign cannot be edited in this state")
+    locked_follow_up_fields = {"profile_id", "from_name", "from_address", "reply_to", "subject_template"}
     for key, value in data.model_dump().items():
+        if campaign.is_follow_up and key in locked_follow_up_fields:
+            continue
         setattr(campaign, key, value)
     db.commit()
     return campaign
@@ -447,6 +461,39 @@ def duplicate_campaign(
     db.add(duplicate)
     db.commit()
     return duplicate
+
+
+@router.post("/campaigns/{campaign_id}/follow-up", response_model=CampaignOut)
+def create_follow_up_campaign(campaign_id: str, db: Session = Depends(get_db)):
+    source = _campaign(db, campaign_id)
+    if source.state != CampaignState.completed:
+        raise HTTPException(409, "follow-up campaigns can only be created from completed campaigns")
+    source_recipients = db.scalars(
+        select(Recipient).where(Recipient.campaign_id == source.id, Recipient.status == "sent", Recipient.message_id.is_not(None))
+    ).all()
+    if not source_recipients:
+        raise HTTPException(409, "the completed campaign has no successfully sent recipients to follow up")
+    settings_copy = {field: getattr(source, field) for field in CampaignIn.model_fields}
+    settings_copy.update({
+        "name": f"Follow-up: {source.name}",
+        "subject_template": f"Re: {source.subject_template}",
+        "body_template": "",
+        "follow_up_source_id": source.id,
+        "is_follow_up": True,
+    })
+    follow_up = Campaign(**settings_copy)
+    db.add(follow_up)
+    db.flush()
+    for recipient in source_recipients:
+        db.add(Recipient(
+            campaign_id=follow_up.id, email=recipient.email, normalized_email=recipient.normalized_email,
+            values=recipient.values, reply_to_message_id=recipient.message_id,
+            source_recipient_id=recipient.id,
+            thread_references=[*(recipient.thread_references or []), recipient.message_id],
+        ))
+    db.add(AuditLog(campaign_id=follow_up.id, action="follow-up-created", detail={"source_campaign_id": source.id, "recipients": len(source_recipients)}))
+    db.commit()
+    return follow_up
 
 
 @router.delete("/campaigns/{campaign_id}")
@@ -476,9 +523,26 @@ def get_recipients(campaign_id: str, db: Session = Depends(get_db)):
     return db.scalars(select(Recipient).where(Recipient.campaign_id == campaign_id).order_by(Recipient.id)).all()
 
 
+@router.put("/campaigns/{campaign_id}/recipients/{recipient_id}", response_model=RecipientOut)
+def set_follow_up_recipient_inclusion(campaign_id: str, recipient_id: str, data: RecipientInclusionIn, db: Session = Depends(get_db)):
+    campaign = _campaign(db, campaign_id)
+    if not campaign.is_follow_up:
+        raise HTTPException(409, "recipient inclusion can only be changed for follow-up campaigns")
+    recipient = db.get(Recipient, recipient_id)
+    if not recipient or recipient.campaign_id != campaign.id:
+        raise HTTPException(404, "recipient not found in campaign")
+    recipient.included = data.included
+    recipient.exclusion_reason = data.exclusion_reason.strip() if not data.included and data.exclusion_reason else None
+    db.add(AuditLog(campaign_id=campaign.id, action="follow-up-recipient-inclusion", detail={"recipient_id": recipient.id, "included": data.included, "reason": recipient.exclusion_reason}))
+    db.commit()
+    return recipient
+
+
 @router.post("/campaigns/{campaign_id}/recipients")
 async def import_recipients(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     campaign = _campaign(db, campaign_id)
+    if campaign.is_follow_up:
+        raise HTTPException(409, "follow-up recipients are derived from the completed source campaign and cannot be imported")
     content_type = request.headers.get("content-type", "")
 
     if "multipart/form-data" in content_type:
@@ -685,6 +749,8 @@ def preview_recipient(campaign_id: str, recipient_id: str, db: Session = Depends
     missing_vars = validate_template_variables(subject_template, body_template, values)
     try:
         rendered = render_message(subject_template, body_template, campaign.body_mode, values)
+        profile = db.get(Profile, campaign.profile_id) if campaign.profile_id else None
+        message = build_message(campaign, recipient.email, rendered, profile, recipient.reply_to_message_id, recipient.thread_references)
         return {
             "recipient_id": recipient.id,
             "email": recipient.email,
@@ -693,6 +759,13 @@ def preview_recipient(campaign_id: str, recipient_id: str, db: Session = Depends
             "text": rendered.text,
             "values": values,
             "missing_variables": missing_vars,
+            "headers": dict(message.items()),
+            "raw_headers": message.as_string().split("\n\n", 1)[0],
+            "mime": {
+                "content_type": message.get_content_type(),
+                "multipart": message.is_multipart(),
+                "attachments": [attachment.filename for attachment in campaign.attachments],
+            },
         }
     except Exception as exc:
         raise HTTPException(422, f"Failed to render message: {exc}") from exc

@@ -23,6 +23,13 @@ def test_campaign_reply_to_overrides_profile():
     campaign = Campaign(name="Test", from_name="Sender", from_address="sender@example.com", reply_to="campaign@example.com")
     message = build_message(campaign, "recipient@example.com", RenderedMessage("Test", "Body", "Body"), profile)
     assert message["Reply-To"] == "campaign@example.com"
+    assert message["Message-ID"].endswith("@example.com>")
+
+
+def test_message_id_falls_back_to_from_domain_without_reply_to():
+    campaign = Campaign(name="Test", from_name="Sender", from_address="sender@tum.de")
+    message = build_message(campaign, "recipient@example.com", RenderedMessage("Test", "Body", "Body"))
+    assert message["Message-ID"].endswith("@tum.de>")
 
 
 def test_campaign_unsubscribe_overrides_profile():

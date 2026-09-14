@@ -3,7 +3,7 @@ from __future__ import annotations
 import mimetypes
 import os
 from email.message import EmailMessage
-from email.utils import formataddr, make_msgid
+from email.utils import formataddr, make_msgid, parseaddr
 from pathlib import Path
 
 from .config import settings
@@ -11,16 +11,20 @@ from .models import Campaign, Profile
 from .rendering import RenderedMessage
 
 
-def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMessage, profile: Profile | None = None) -> EmailMessage:
+def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMessage, profile: Profile | None = None, reply_to_message_id: str | None = None, thread_references: list[str] | None = None) -> EmailMessage:
     message = EmailMessage()
     from_name = campaign.from_name or (profile.from_name if profile else "") or ""
     from_address = campaign.from_address or (profile.from_address if profile else "") or ""
-    domain = from_address.split("@")[-1] if "@" in from_address else None
+    reply_to = campaign.reply_to or (profile.reply_to if profile else None)
+    reply_to_address = parseaddr(reply_to or "")[1]
+    domain = reply_to_address.split("@")[-1] if "@" in reply_to_address else (from_address.split("@")[-1] if "@" in from_address else None)
     message["Message-ID"] = make_msgid(domain=domain)
     message["From"] = formataddr((from_name, from_address))
     message["To"] = recipient_email
     message["Subject"] = rendered.subject
-    reply_to = campaign.reply_to or (profile.reply_to if profile else None)
+    if reply_to_message_id:
+        message["In-Reply-To"] = reply_to_message_id
+        message["References"] = " ".join(thread_references or [reply_to_message_id])
     if reply_to:
         message["Reply-To"] = reply_to
 
