@@ -169,6 +169,47 @@ const localDateTimeValue = (date: Date) => {
   return local.toISOString().slice(0, 16);
 };
 
+const parseRecipientRecords = (input: string): unknown[] => {
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error('Recipient data is empty.');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    parsed = trimmed.split('\n').map((line) => line.trim()).filter(Boolean).map((line, index) => {
+      try {
+        return JSON.parse(line.trim());
+      } catch (error: any) {
+        throw new Error(`Syntax error on line ${index + 1} of JSONLines: ${error.message}`);
+      }
+    });
+  }
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === 'object') {
+    const wrapped = parsed as Record<string, unknown>;
+    for (const key of ['recipients', 'items', 'data']) {
+      if (Array.isArray(wrapped[key])) return wrapped[key];
+    }
+    return [parsed];
+  }
+  throw new Error('Recipient data must be a JSON object, array, or JSONLines records.');
+};
+
+const duplicateEmails = (records: unknown[]): string[] => {
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  for (const record of records) {
+    if (!record || typeof record !== 'object') continue;
+    const row = record as Record<string, unknown>;
+    const email = String(row.email ?? row.Email ?? row.recipient ?? '').trim();
+    if (!email) continue;
+    const normalized = email.toLocaleLowerCase();
+    if (seen.has(normalized)) duplicates.push(email);
+    seen.add(normalized);
+  }
+  return duplicates;
+};
+
 function Dashboard() {
   const { getToken } = useAuth();
 
@@ -214,6 +255,7 @@ function Dashboard() {
   const [jsonInput, setJsonInput] = useState('');
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [uploadedFileSize, setUploadedFileSize] = useState<number | null>(null);
+  const [uploadedRecordCount, setUploadedRecordCount] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [testEmailAddress, setTestEmailAddress] = useState('');
@@ -588,10 +630,20 @@ function Dashboard() {
   const processFile = async (file: File) => {
     try {
       const text = await file.text();
+      const records = parseRecipientRecords(text);
+      const duplicates = duplicateEmails(records);
+      if (duplicates.length) {
+        const examples = duplicates.slice(0, 10).join(', ');
+        const remaining = duplicates.length - Math.min(duplicates.length, 10);
+        throw new Error(
+          `File cannot be imported: ${duplicates.length} duplicate email address(es), ignoring case. Examples: ${examples}${remaining ? ` (and ${remaining} more)` : ''}.`
+        );
+      }
       setJsonInput(text);
       setUploadedFileName(file.name);
       setUploadedFileSize(file.size);
-      notify(`Loaded file "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`);
+      setUploadedRecordCount(records.length);
+      notify(`Loaded file "${file.name}" (${records.length} recipient record${records.length === 1 ? '' : 's'}).`);
     } catch (err: any) {
       notify(`Failed to read file: ${err.message}`, true);
     }
@@ -620,23 +672,7 @@ function Dashboard() {
       if (!trimmed) {
         throw new Error('Please upload a file or paste JSON/JSONLines recipient data.');
       }
-      let parsed;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        // Fallback: parse as JSONLines (NDJSON)
-        const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
-        if (lines.length === 0) {
-          throw new Error('Recipient data is empty.');
-        }
-        parsed = lines.map((line, idx) => {
-          try {
-            return JSON.parse(line);
-          } catch (err: any) {
-            throw new Error(`Syntax error on line ${idx + 1} of JSONLines: ${err.message}`);
-          }
-        });
-      }
+      const parsed = parseRecipientRecords(trimmed);
       const result = await api(`/campaigns/${selected.id}/recipients`, {
         method: 'POST',
         body: JSON.stringify(parsed),
@@ -745,6 +781,7 @@ function Dashboard() {
   const loadSampleJson = () => {
     setUploadedFileName(null);
     setUploadedFileSize(null);
+    setUploadedRecordCount(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setJsonInput(
       JSON.stringify(
@@ -762,6 +799,7 @@ function Dashboard() {
   const loadSampleJsonlines = () => {
     setUploadedFileName(null);
     setUploadedFileSize(null);
+    setUploadedRecordCount(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setJsonInput(
       [
@@ -773,6 +811,8 @@ function Dashboard() {
   };
 
   const totalRecipients = recipients.length;
+  let inputRecordCount: number | null = null;
+  try { inputRecordCount = parseRecipientRecords(jsonInput).length; } catch {}
   const sentCount = eventCounts['sent'] || 0;
   const progressPercent =
     totalRecipients > 0 ? Math.round((sentCount / totalRecipients) * 100) : 0;
@@ -1386,6 +1426,7 @@ function Dashboard() {
                         <span>
                           📎 <strong>{uploadedFileName}</strong> (
                           {uploadedFileSize ? (uploadedFileSize / 1024).toFixed(1) : 0} KB)
+                          {uploadedRecordCount !== null && ` · ${uploadedRecordCount} record${uploadedRecordCount === 1 ? '' : 's'}`}
                         </span>
                         <button
                           className="secondary"
@@ -1394,6 +1435,7 @@ function Dashboard() {
                             e.stopPropagation();
                             setUploadedFileName(null);
                             setUploadedFileSize(null);
+                            setUploadedRecordCount(null);
                             setJsonInput('');
                             if (fileInputRef.current) fileInputRef.current.value = '';
                           }}
@@ -1408,7 +1450,7 @@ function Dashboard() {
                         <span>Edit / Paste JSON or JSONLines Content:</span>
                         {jsonInput && (
                           <span style={{ fontSize: '0.8rem', color: '#5e6b62', fontWeight: 'normal' }}>
-                            {jsonInput.split('\n').filter((l) => l.trim()).length} line(s)
+                            {inputRecordCount !== null ? `${inputRecordCount} record${inputRecordCount === 1 ? '' : 's'}` : 'Invalid JSON/JSONLines'}
                           </span>
                         )}
                       </label>
@@ -1437,6 +1479,7 @@ function Dashboard() {
                             setJsonInput('');
                             setUploadedFileName(null);
                             setUploadedFileSize(null);
+                            setUploadedRecordCount(null);
                             if (fileInputRef.current) fileInputRef.current.value = '';
                           }}
                         >

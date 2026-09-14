@@ -499,6 +499,18 @@ async def import_recipients(campaign_id: str, request: Request, db: Session = De
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(422, f"Failed to parse recipients JSON: {exc}") from exc
 
+    duplicate_emails = [row.email for row in rows if row.duplicate]
+    if duplicate_emails:
+        examples = ", ".join(duplicate_emails[:10])
+        remaining = len(duplicate_emails) - len(duplicate_emails[:10])
+        suffix = f" (and {remaining} more)" if remaining else ""
+        raise HTTPException(
+            422,
+            "Recipient list cannot be imported because it contains "
+            f"{len(duplicate_emails)} duplicate email address(es), ignoring case. "
+            f"Examples: {examples}{suffix}. Existing recipients were not changed.",
+        )
+
     db.query(Recipient).filter(Recipient.campaign_id == campaign.id).delete()
     for row in rows:
         db.add(

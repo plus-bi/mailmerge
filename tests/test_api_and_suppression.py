@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,7 @@ from mailmerge.api import (
     campaign_statuses,
     duplicate_campaign,
     generate_campaign_token,
+    import_recipients,
     list_suppressions,
     preflight,
     preview_recipient,
@@ -29,7 +31,7 @@ from mailmerge.config import settings
 from mailmerge.db import Base, get_db
 from mailmerge.models import Campaign, Profile, Recipient, CampaignState
 from mailmerge.suppression import sync_suppressions
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 
 @pytest.fixture
@@ -134,6 +136,33 @@ def test_api_json_recipient_import_and_preflight(client, test_db_session):
     # 8. Verify Campaign and its recipients are deleted
     get_res = client.get(f"/api/v1/campaigns/{campaign_id}")
     assert get_res.status_code == 404
+
+
+def test_duplicate_recipient_import_is_rejected_without_replacing_existing_recipients(test_db_session):
+    profile = Profile(name="Duplicate test", smtp_host="localhost", smtp_port=1025, security="none")
+    test_db_session.add(profile)
+    test_db_session.flush()
+    campaign = Campaign(name="Duplicate test", profile_id=profile.id)
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    existing = Recipient(campaign_id=campaign.id, email="existing@example.com", normalized_email="existing@example.com")
+    test_db_session.add(existing)
+    test_db_session.commit()
+
+    class RequestStub:
+        headers = {"content-type": "application/json"}
+
+        async def body(self):
+            return b'[{"email":"duplicate@example.com"},{"email":"DUPLICATE@example.com"}]'
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(import_recipients(campaign.id, RequestStub(), test_db_session))
+
+    assert raised.value.status_code == 422
+    assert "2 duplicate email" not in raised.value.detail
+    assert "1 duplicate email" in raised.value.detail
+    assert "DUPLICATE@example.com" in raised.value.detail
+    assert test_db_session.query(Recipient).filter_by(campaign_id=campaign.id).one().email == "existing@example.com"
 
 
 def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):
