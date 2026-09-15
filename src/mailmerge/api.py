@@ -30,6 +30,7 @@ from .rendering import get_required_variables, render_message, templates_for_uns
 from .secrets import get_secret, set_secret
 from .smtp import AuthenticationFailure, connect, send
 from .suppression import sync_suppressions
+from .bounce_import import SuppressionMatch, apply_suppressions, find_new_resend_bounces, find_new_smtp_failures
 
 router = APIRouter(prefix="/api/v1")
 
@@ -163,6 +164,7 @@ class UnsubscribeEventOut(ORMModel):
     email: str
     campaign_id: str | None
     campaign: str
+    suppression_type: str
     reason: str
     unsubscribed_at: datetime
 
@@ -170,6 +172,26 @@ class UnsubscribeEventOut(ORMModel):
 class SuppressionListOut(BaseModel):
     events: list[UnsubscribeEventOut]
     last_synced_at: datetime | None
+
+
+class SuppressionCandidateOut(BaseModel):
+    marker: str
+    email: str
+    suppression_type: str
+    reason: str
+    occurred_at: datetime
+    campaign_id: str | None
+    campaign: str
+
+
+class SuppressionReviewOut(BaseModel):
+    candidates: list[SuppressionCandidateOut]
+    warnings: list[str]
+    synced_unsubscribes: int
+
+
+class SuppressionApplyIn(BaseModel):
+    markers: list[str]
 
 
 class RecipientOut(ORMModel):
@@ -809,6 +831,7 @@ def list_suppressions(db: Session = Depends(get_db)):
             "email": event.email,
             "campaign_id": event.campaign_id,
             "campaign": event.campaign,
+            "suppression_type": "Unsubscribed",
             "reason": event.reason,
             "unsubscribed_at": event.unsubscribed_at,
         }
@@ -817,17 +840,87 @@ def list_suppressions(db: Session = Depends(get_db)):
     for event in bounce_events:
         recipient = db.get(Recipient, event.recipient_id) if event.recipient_id else None
         if recipient:
+            campaign = db.get(Campaign, recipient.campaign_id)
             events.append({
                 "source_event_id": f"bounce:{event.id}",
                 "email": recipient.normalized_email,
                 "campaign_id": recipient.campaign_id,
-                "campaign": db.get(Campaign, recipient.campaign_id).name if db.get(Campaign, recipient.campaign_id) else "",
-                "reason": event.kind,
+                "campaign": campaign.name if campaign else "",
+                "suppression_type": event.kind,
+                "reason": event.diagnostic if event.source_marker and event.diagnostic else event.kind,
                 "unsubscribed_at": event.received_at,
             })
     events.sort(key=lambda event: event["unsubscribed_at"], reverse=True)
     cursor = db.get(SyncCursor, "unsubscribe_service")
     return {"events": events, "last_synced_at": cursor.updated_at if cursor else None}
+
+
+def _candidate_rows(db: Session, matches: list[SuppressionMatch]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for match in matches:
+        recipients_by_email: dict[str, list[Recipient]] = {}
+        for recipient in match.recipients:
+            recipients_by_email.setdefault(recipient.normalized_email, []).append(recipient)
+        for email, recipients in recipients_by_email.items():
+            campaign_ids = {recipient.campaign_id for recipient in recipients}
+            campaign_names = [
+                campaign.name for campaign_id in campaign_ids
+                if (campaign := db.get(Campaign, campaign_id)) is not None
+            ]
+            rows.append({
+                "marker": match.marker,
+                "email": email,
+                "suppression_type": match.source,
+                "reason": match.reason,
+                "occurred_at": match.occurred_at,
+                "campaign_id": next(iter(campaign_ids)) if len(campaign_ids) == 1 else None,
+                "campaign": ", ".join(sorted(campaign_names)),
+            })
+    return rows
+
+
+def _suppression_matches_for_review(db: Session) -> tuple[list[SuppressionMatch], list[str], int]:
+    warnings: list[str] = []
+    synced_unsubscribes = 0
+    try:
+        synced_unsubscribes = sync_suppressions(db)
+    except (RuntimeError, ValueError) as exc:
+        warnings.append(f"Unsubscribe sync unavailable: {exc}")
+
+    matches = find_new_smtp_failures(db)
+    token = os.getenv("MAILMERGE_RESEND_MONITOR_API_TOKEN", "")
+    if not token:
+        warnings.append("Resend bounce review is unavailable until MAILMERGE_RESEND_MONITOR_API_TOKEN is configured.")
+        return matches, warnings, synced_unsubscribes
+    try:
+        matches.extend(find_new_resend_bounces(
+            db, os.getenv("MAILMERGE_RESEND_MONITOR_URL", "http://127.0.0.1:8089"), token
+        ))
+    except RuntimeError as exc:
+        warnings.append(f"Resend bounce review unavailable: {exc}")
+    return matches, warnings, synced_unsubscribes
+
+
+@router.post("/suppressions/review", response_model=SuppressionReviewOut)
+def review_suppressions(db: Session = Depends(get_db)):
+    matches, warnings, synced_unsubscribes = _suppression_matches_for_review(db)
+    db.commit()
+    rows = _candidate_rows(db, matches)
+    return {"candidates": rows, "warnings": warnings, "synced_unsubscribes": synced_unsubscribes}
+
+
+@router.post("/suppressions/apply")
+def apply_suppression_candidates(data: SuppressionApplyIn, db: Session = Depends(get_db)):
+    requested = set(data.markers)
+    if not requested:
+        raise HTTPException(422, "select at least one suppression candidate")
+    matches, _warnings, _synced = _suppression_matches_for_review(db)
+    selected = [match for match in matches if match.marker in requested]
+    if not selected:
+        raise HTTPException(409, "selected suppression candidates are no longer available")
+    updated = apply_suppressions(db, selected)
+    db.commit()
+    return {"ok": True, "suppressed": updated}
 
 
 @router.post("/suppressions/sync")

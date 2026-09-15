@@ -147,6 +147,9 @@ class BounceEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     recipient_id: Mapped[str | None] = mapped_column(ForeignKey("recipients.id", ondelete="SET NULL"))
     kind: Mapped[str] = mapped_column(String(20))
+    # A single source event can suppress matching copies of an address in more
+    # than one campaign, so this is deliberately not unique per bounce row.
+    source_marker: Mapped[str | None] = mapped_column(String(255), index=True)
     diagnostic: Mapped[str | None] = mapped_column(Text)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     recognized: Mapped[bool] = mapped_column(Boolean, default=False)

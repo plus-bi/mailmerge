@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import pytest
+import mailmerge.api as api_module
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -21,6 +22,9 @@ from mailmerge.api import (
     generate_campaign_token,
     import_recipients,
     list_suppressions,
+    review_suppressions,
+    apply_suppression_candidates,
+    SuppressionApplyIn,
     preflight,
     preview_recipient,
     router,
@@ -221,6 +225,8 @@ def test_resend_bounce_import_suppresses_matching_recipients_idempotently(test_d
     assert test_db_session.get(Recipient, recipient.id).suppressed is True
     assert test_db_session.query(BounceEvent).count() == 1
     assert test_db_session.query(BounceEvent).one().kind == "Resend bounce"
+    assert test_db_session.query(BounceEvent).one().source_marker == "resend-inbound:resend-bounce-1"
+    assert test_db_session.query(BounceEvent).one().diagnostic == "Resend bounce: Undelivered Mail Returned to Sender"
     assert test_db_session.query(AuditLog).filter_by(action="bounce-suppressed").count() == 1
     assert find_new_bounces(test_db_session, [message]) == []
 
@@ -241,7 +247,52 @@ def test_smtp_failure_import_suppresses_matching_recipients(test_db_session):
 
     assert updated == 1
     assert test_db_session.get(Recipient, recipient.id).suppressed is True
+    assert test_db_session.query(BounceEvent).one().diagnostic == "SMTP 550: recipient rejected"
     assert find_new_smtp_failures(test_db_session) == []
+
+
+def test_suppression_review_and_selected_apply_for_smtp_failure(test_db_session, monkeypatch):
+    campaign = Campaign(name="Review SMTP failure")
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    recipient = Recipient(
+        campaign_id=campaign.id,
+        email="review-failed@example.com",
+        normalized_email="review-failed@example.com",
+        status="failed",
+    )
+    test_db_session.add(recipient)
+    test_db_session.flush()
+    attempt = DeliveryAttempt(
+        recipient_id=recipient.id,
+        outcome="permanent",
+        smtp_code=550,
+        detail="mailbox unavailable",
+    )
+    test_db_session.add(attempt)
+    test_db_session.commit()
+    monkeypatch.setattr(api_module, "sync_suppressions", lambda db: 0)
+    monkeypatch.delenv("MAILMERGE_RESEND_MONITOR_API_TOKEN", raising=False)
+
+    review = review_suppressions(test_db_session)
+
+    assert review["candidates"] == [{
+        "marker": f"smtp-failure:{attempt.id}",
+        "email": "review-failed@example.com",
+        "suppression_type": "SMTP failure",
+        "reason": "SMTP 550: mailbox unavailable",
+        "occurred_at": attempt.attempted_at,
+        "campaign_id": campaign.id,
+        "campaign": "Review SMTP failure",
+    }]
+    assert review["warnings"]
+
+    applied = apply_suppression_candidates(
+        SuppressionApplyIn(markers=[f"smtp-failure:{attempt.id}"]), test_db_session
+    )
+
+    assert applied == {"ok": True, "suppressed": 1}
+    assert test_db_session.get(Recipient, recipient.id).suppressed is True
 
 
 def test_smtp_failure_import_does_not_change_an_active_campaign(test_db_session):
@@ -679,11 +730,12 @@ def test_suppression_sync_from_sqlite_db(test_db_session, tmp_path, monkeypatch)
     suppression_list = list_suppressions(test_db_session)
     events = suppression_list["events"]
     assert len(events) == 1
-    assert events[0].source_event_id == 1
-    assert events[0].email == "unsub@example.com"
-    assert events[0].campaign_id == "c1"
-    assert events[0].campaign == "Camp 1"
-    assert events[0].unsubscribed_at == datetime.fromtimestamp(1700000000, timezone.utc).replace(tzinfo=None)
+    assert events[0]["source_event_id"] == "unsubscribe:1"
+    assert events[0]["email"] == "unsub@example.com"
+    assert events[0]["campaign_id"] == "c1"
+    assert events[0]["campaign"] == "Camp 1"
+    assert events[0]["suppression_type"] == "Unsubscribed"
+    assert events[0]["unsubscribed_at"] == datetime.fromtimestamp(1700000000, timezone.utc).replace(tzinfo=None)
     assert suppression_list["last_synced_at"] is not None
 
     result = trigger_global_suppression_sync(test_db_session)

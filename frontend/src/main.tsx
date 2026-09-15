@@ -161,6 +161,7 @@ type UnsubscribeEvent = {
   email: string;
   campaign_id: string | null;
   campaign: string;
+  suppression_type: string;
   reason: string;
   unsubscribed_at: string;
 };
@@ -168,6 +169,22 @@ type UnsubscribeEvent = {
 type SuppressionList = {
   events: UnsubscribeEvent[];
   last_synced_at: string | null;
+};
+
+type SuppressionCandidate = {
+  marker: string;
+  email: string;
+  suppression_type: string;
+  reason: string;
+  occurred_at: string;
+  campaign_id: string | null;
+  campaign: string;
+};
+
+type SuppressionReview = {
+  candidates: SuppressionCandidate[];
+  warnings: string[];
+  synced_unsubscribes: number;
 };
 
 const localDateTimeValue = (date: Date) => {
@@ -251,6 +268,8 @@ function Dashboard() {
   const [unsubscribeEvents, setUnsubscribeEvents] = useState<UnsubscribeEvent[]>([]);
   const [lastSuppressionSync, setLastSuppressionSync] = useState<string | null>(null);
   const [suppressionLoading, setSuppressionLoading] = useState(false);
+  const [suppressionCandidates, setSuppressionCandidates] = useState<SuppressionCandidate[]>([]);
+  const [selectedSuppressionMarkers, setSelectedSuppressionMarkers] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send' | 'status' | 'unsubscribed'>('template');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -759,10 +778,45 @@ function Dashboard() {
   const handleSyncSuppressions = async () => {
     setSuppressionLoading(true);
     try {
-      const res = await api('/suppressions/sync', { method: 'POST' });
+      const res: SuppressionReview = await api('/suppressions/review', { method: 'POST' });
+      setSuppressionCandidates(res.candidates);
+      setSelectedSuppressionMarkers(new Set());
       await loadSuppressions();
       if (selected) await loadRecipients(selected.id);
-      notify(`Sync completed: ${res.synced_events} new event${res.synced_events === 1 ? '' : 's'} processed; ${res.total} total.`);
+      const warning = res.warnings.length ? ` ${res.warnings.join(' ')}` : '';
+      notify(`Review found ${res.candidates.length} new suppression candidate${res.candidates.length === 1 ? '' : 's'}.${warning}`, Boolean(res.warnings.length));
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setSuppressionLoading(false);
+    }
+  };
+
+  const toggleSuppressionCandidate = (marker: string) => {
+    setSelectedSuppressionMarkers((current) => {
+      const next = new Set(current);
+      if (next.has(marker)) next.delete(marker);
+      else next.add(marker);
+      return next;
+    });
+  };
+
+  const applySelectedSuppressions = async () => {
+    if (selectedSuppressionMarkers.size === 0) {
+      notify('Select at least one suppression candidate.', true);
+      return;
+    }
+    setSuppressionLoading(true);
+    try {
+      const result = await api('/suppressions/apply', {
+        method: 'POST',
+        body: JSON.stringify({ markers: [...selectedSuppressionMarkers] }),
+      });
+      setSuppressionCandidates((current) => current.filter((candidate) => !selectedSuppressionMarkers.has(candidate.marker)));
+      setSelectedSuppressionMarkers(new Set());
+      await loadSuppressions();
+      if (selected) await loadRecipients(selected.id);
+      notify(`Added ${result.suppressed} recipient record${result.suppressed === 1 ? '' : 's'} to the suppression list.`);
     } catch (e: any) {
       notify(e.message, true);
     } finally {
@@ -1212,7 +1266,7 @@ function Dashboard() {
                   className={`tab-btn ${activeTab === 'unsubscribed' ? 'active' : ''}`}
                   onClick={() => setActiveTab('unsubscribed')}
                 >
-                  🚫 Unsubscribed ({unsubscribeEvents.length})
+                  🚫 Suppression List ({unsubscribeEvents.length})
                 </button>
               </div>
 
@@ -1809,7 +1863,7 @@ function Dashboard() {
                 </div>
               )}
 
-              {/* TAB 6: Unsubscribed addresses */}
+              {/* TAB 6: Suppression list */}
               {activeTab === 'unsubscribed' && (
                 <div>
                   <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '20px' }}>
@@ -1821,7 +1875,7 @@ function Dashboard() {
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <button onClick={handleSyncSuppressions} disabled={suppressionLoading} style={{ whiteSpace: 'nowrap' }}>
-                        {suppressionLoading ? 'Synchronizing…' : '↻ Sync Unsubscribe List'}
+                        {suppressionLoading ? 'Reviewing…' : '↻ Sync & review'}
                       </button>
                       <div style={{ marginTop: '7px', fontSize: '0.78rem', color: '#5e6b62' }}>
                         Last synced: {lastSuppressionSync ? new Date(lastSuppressionSync).toLocaleString() : 'Never'}
@@ -1829,12 +1883,63 @@ function Dashboard() {
                     </div>
                   </div>
 
+                  {suppressionCandidates.length > 0 && (
+                    <div className="card" style={{ marginTop: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center', marginBottom: '12px' }}>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: '1rem' }}>New suppression candidates</h3>
+                          <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#5e6b62' }}>
+                            Select the bounce or delivery-failure addresses to add. Active campaigns are excluded.
+                          </p>
+                        </div>
+                        <button onClick={applySelectedSuppressions} disabled={suppressionLoading || selectedSuppressionMarkers.size === 0}>
+                          Add selected ({selectedSuppressionMarkers.size})
+                        </button>
+                      </div>
+                      <div className="table-wrapper">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th aria-label="Select"></th>
+                              <th>Email address</th>
+                              <th>Suppression type</th>
+                              <th>Date</th>
+                              <th>Campaign</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {suppressionCandidates.map((candidate) => (
+                              <tr key={`${candidate.marker}:${candidate.email}`}>
+                                <td>
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedSuppressionMarkers.has(candidate.marker)}
+                                    onChange={() => toggleSuppressionCandidate(candidate.marker)}
+                                    aria-label={`Select ${candidate.email}`}
+                                  />
+                                </td>
+                                <td><strong>{candidate.email}</strong></td>
+                                <td>
+                                  <strong>{candidate.suppression_type}</strong>
+                                  <div style={{ fontSize: '0.78rem', color: '#5e6b62', maxWidth: '360px' }}>{candidate.reason}</div>
+                                </td>
+                                <td>{new Date(candidate.occurred_at).toLocaleString()}</td>
+                                <td>{candidate.campaign || 'Unknown'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  <h3 style={{ margin: '20px 0 8px', fontSize: '1rem' }}>Existing suppression list</h3>
                   <div className="table-wrapper">
                     <table>
                       <thead>
                         <tr>
                           <th>Email address</th>
-                          <th>Reason</th>
+                          <th>Suppression type</th>
                           <th>Campaign</th>
                           <th>Suppressed</th>
                         </tr>
@@ -1843,7 +1948,12 @@ function Dashboard() {
                         {unsubscribeEvents.map((event) => (
                           <tr key={event.source_event_id}>
                             <td><strong>{event.email}</strong></td>
-                            <td>{event.reason}</td>
+                            <td>
+                              <strong>{event.suppression_type}</strong>
+                              {event.reason !== event.suppression_type && (
+                                <div style={{ fontSize: '0.78rem', color: '#5e6b62', maxWidth: '360px' }}>{event.reason}</div>
+                              )}
+                            </td>
                             <td>
                               <strong>{event.campaign || 'Unknown'}</strong>
                               {event.campaign_id && (

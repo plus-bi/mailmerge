@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal, init_db
@@ -36,8 +36,8 @@ def extract_addresses(message: dict[str, Any]) -> set[str]:
     return {address.lower() for address in EMAIL_RE.findall("\n".join(sources))}
 
 
-def bounce_messages(client: httpx.Client, base_url: str, limit: int) -> Iterable[dict[str, Any]]:
-    headers = {"Authorization": f"Bearer {os.environ['MAILMERGE_RESEND_MONITOR_API_TOKEN']}"}
+def bounce_messages(client: httpx.Client, base_url: str, limit: int, token: str) -> Iterable[dict[str, Any]]:
+    headers = {"Authorization": f"Bearer {token}"}
     try:
         listing = client.get(f"{base_url.rstrip('/')}/api/emails", params={"limit": limit}, headers=headers)
         listing.raise_for_status()
@@ -63,7 +63,45 @@ def bounce_messages(client: httpx.Client, base_url: str, limit: int) -> Iterable
 class SuppressionMatch:
     source: str
     marker: str
+    reason: str
+    occurred_at: datetime
     recipients: list[Recipient]
+
+
+def _short_reason(value: str, fallback: str) -> str:
+    condensed = " ".join(value.split())
+    return condensed[:240] if condensed else fallback
+
+
+def bounce_reason(message: dict[str, Any]) -> str:
+    """Extract the most useful DSN diagnostic without displaying mail content."""
+    body = str(message.get("text_body") or "")
+    diagnostic = re.search(r"^Diagnostic-Code:\s*(.+)$", body, re.IGNORECASE | re.MULTILINE)
+    if diagnostic:
+        return _short_reason(f"Resend bounce: {diagnostic.group(1)}", "Resend bounce")
+    status = re.search(r"^Status:\s*([245]\.\d\.\d)\s*$", body, re.IGNORECASE | re.MULTILINE)
+    if status:
+        return f"Resend bounce: DSN {status.group(1)}"
+    return "Resend bounce: Undelivered Mail Returned to Sender"
+
+
+def smtp_failure_reason(attempt: DeliveryAttempt) -> str:
+    prefix = f"SMTP {attempt.smtp_code}" if attempt.smtp_code else "SMTP delivery failure"
+    return _short_reason(f"{prefix}: {attempt.detail or ''}", prefix)
+
+
+def _known_marker(db: Session, marker: str) -> BounceEvent | None:
+    # Older imports stored the marker in diagnostic; retain their idempotency.
+    return db.scalar(
+        select(BounceEvent).where(or_(BounceEvent.source_marker == marker, BounceEvent.diagnostic == marker))
+    )
+
+
+def _bounce_received_at(message: dict[str, Any]) -> datetime:
+    value = message.get("received_at")
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def find_new_bounces(db: Session, messages: Iterable[dict[str, Any]]) -> list[SuppressionMatch]:
@@ -80,12 +118,21 @@ def find_new_bounces(db: Session, messages: Iterable[dict[str, Any]]) -> list[Su
             .where(Recipient.normalized_email.in_(candidates), Campaign.state != CampaignState.sending)
         ).all() if candidates else []
         marker = f"resend-inbound:{source_id}"
-        known_bounce = db.scalar(select(BounceEvent).where(BounceEvent.diagnostic == marker))
+        known_bounce = _known_marker(db, marker)
         recipients = [recipient for recipient in recipients if not recipient.suppressed]
         if known_bounce or not recipients:
             continue
-        matches.append(SuppressionMatch(source="Resend bounce", marker=marker, recipients=recipients))
+        matches.append(SuppressionMatch(
+            source="Resend bounce", marker=marker, reason=bounce_reason(message),
+            occurred_at=_bounce_received_at(message), recipients=recipients
+        ))
     return matches
+
+
+def find_new_resend_bounces(db: Session, monitor_url: str, token: str, limit: int = 200) -> list[SuppressionMatch]:
+    """Fetch and inspect stored Resend DSNs for an interactive reviewer."""
+    with httpx.Client(timeout=15.0) as client:
+        return find_new_bounces(db, bounce_messages(client, monitor_url, limit, token))
 
 
 def find_new_smtp_failures(db: Session) -> list[SuppressionMatch]:
@@ -104,7 +151,7 @@ def find_new_smtp_failures(db: Session) -> list[SuppressionMatch]:
             continue
         seen_addresses.add(address)
         marker = f"smtp-failure:{attempt.id}"
-        if db.scalar(select(BounceEvent).where(BounceEvent.diagnostic == marker)):
+        if _known_marker(db, marker):
             continue
         recipients = db.scalars(
             select(Recipient)
@@ -116,7 +163,10 @@ def find_new_smtp_failures(db: Session) -> list[SuppressionMatch]:
             )
         ).all()
         if recipients:
-            matches.append(SuppressionMatch(source="SMTP failure", marker=marker, recipients=recipients))
+            matches.append(SuppressionMatch(
+                source="SMTP failure", marker=marker, reason=smtp_failure_reason(attempt),
+                occurred_at=attempt.attempted_at, recipients=recipients
+            ))
     return matches
 
 
@@ -132,14 +182,15 @@ def apply_suppressions(db: Session, matches: Iterable[SuppressionMatch]) -> int:
             db.add(BounceEvent(
                 recipient_id=recipient.id,
                 kind=match.source,
-                diagnostic=match.marker,
-                received_at=datetime.now(timezone.utc),
+                source_marker=match.marker,
+                diagnostic=match.reason,
+                received_at=match.occurred_at,
                 recognized=True,
             ))
             db.add(AuditLog(
                 campaign_id=recipient.campaign_id,
                 action="bounce-suppressed",
-                detail={"email": recipient.normalized_email, "source": match.marker},
+                detail={"email": recipient.normalized_email, "source": match.marker, "reason": match.reason},
             ))
     return matched_records
 
@@ -157,7 +208,7 @@ def main() -> None:
 
     init_db()
     with httpx.Client(timeout=15.0) as client:
-        messages = list(bounce_messages(client, args.monitor_url, args.limit))
+        messages = list(bounce_messages(client, args.monitor_url, args.limit, os.environ["MAILMERGE_RESEND_MONITOR_API_TOKEN"]))
     with SessionLocal() as db:
         bounce_matches = find_new_bounces(db, messages)
         smtp_matches = find_new_smtp_failures(db)

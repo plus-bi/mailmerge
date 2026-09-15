@@ -53,6 +53,7 @@ def init_db() -> None:
             ("recipients", "exclusion_reason", "TEXT"),
             ("unsubscribe_events", "campaign_id", "VARCHAR"),
             ("unsubscribe_events", "reason", "VARCHAR(100) DEFAULT 'Unsubscribed'"),
+            ("bounce_events", "source_marker", "VARCHAR(255)"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
