@@ -801,6 +801,14 @@ function Dashboard() {
     });
   };
 
+  const toggleAllSuppressionCandidates = () => {
+    setSelectedSuppressionMarkers((current) => (
+      current.size === suppressionCandidates.length
+        ? new Set()
+        : new Set(suppressionCandidates.map((candidate) => candidate.marker))
+    ));
+  };
+
   const applySelectedSuppressions = async () => {
     if (selectedSuppressionMarkers.size === 0) {
       notify('Select at least one suppression candidate.', true);
@@ -1889,12 +1897,17 @@ function Dashboard() {
                         <div>
                           <h3 style={{ margin: 0, fontSize: '1rem' }}>New suppression candidates</h3>
                           <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#5e6b62' }}>
-                            Select the bounce or delivery-failure addresses to add. Active campaigns are excluded.
+                            Select inherited, bounce, or delivery-failure addresses to add. Active campaigns are excluded.
                           </p>
                         </div>
-                        <button onClick={applySelectedSuppressions} disabled={suppressionLoading || selectedSuppressionMarkers.size === 0}>
-                          Add selected ({selectedSuppressionMarkers.size})
-                        </button>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button onClick={toggleAllSuppressionCandidates} disabled={suppressionLoading}>
+                            {selectedSuppressionMarkers.size === suppressionCandidates.length ? 'Clear all' : 'Select all'}
+                          </button>
+                          <button onClick={applySelectedSuppressions} disabled={suppressionLoading || selectedSuppressionMarkers.size === 0}>
+                            Add selected ({selectedSuppressionMarkers.size})
+                          </button>
+                        </div>
                       </div>
                       <div className="table-wrapper">
                         <table>

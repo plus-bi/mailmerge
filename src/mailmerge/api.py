@@ -30,7 +30,7 @@ from .rendering import get_required_variables, render_message, templates_for_uns
 from .secrets import get_secret, set_secret
 from .smtp import AuthenticationFailure, connect, send
 from .suppression import sync_suppressions
-from .bounce_import import SuppressionMatch, apply_suppressions, find_new_resend_bounces, find_new_smtp_failures
+from .bounce_import import SuppressionMatch, apply_suppressions, find_inherited_suppressions, find_new_resend_bounces, find_new_smtp_failures
 
 router = APIRouter(prefix="/api/v1")
 
@@ -887,7 +887,8 @@ def _suppression_matches_for_review(db: Session) -> tuple[list[SuppressionMatch]
     except (RuntimeError, ValueError) as exc:
         warnings.append(f"Unsubscribe sync unavailable: {exc}")
 
-    matches = find_new_smtp_failures(db)
+    matches = find_inherited_suppressions(db)
+    matches.extend(find_new_smtp_failures(db))
     token = os.getenv("MAILMERGE_RESEND_MONITOR_API_TOKEN", "")
     if not token:
         warnings.append("Resend bounce review is unavailable until MAILMERGE_RESEND_MONITOR_API_TOKEN is configured.")

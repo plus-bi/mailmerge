@@ -34,9 +34,9 @@ from mailmerge.api import (
     update_campaign,
 )
 from mailmerge.config import settings
-from mailmerge.bounce_import import apply_suppressions, find_new_bounces, find_new_smtp_failures
+from mailmerge.bounce_import import apply_suppressions, find_inherited_suppressions, find_new_bounces, find_new_smtp_failures
 from mailmerge.db import Base, get_db
-from mailmerge.models import AuditLog, BounceEvent, Campaign, DeliveryAttempt, Profile, Recipient, CampaignState, recipient_domain_ordering
+from mailmerge.models import AuditLog, BounceEvent, Campaign, DeliveryAttempt, Profile, Recipient, CampaignState, UnsubscribeEvent, recipient_domain_ordering
 from mailmerge.suppression import sync_suppressions
 from fastapi import FastAPI, HTTPException
 
@@ -225,7 +225,7 @@ def test_resend_bounce_import_suppresses_matching_recipients_idempotently(test_d
     assert test_db_session.get(Recipient, recipient.id).suppressed is True
     assert test_db_session.query(BounceEvent).count() == 1
     assert test_db_session.query(BounceEvent).one().kind == "Resend bounce"
-    assert test_db_session.query(BounceEvent).one().source_marker == "resend-inbound:resend-bounce-1"
+    assert test_db_session.query(BounceEvent).one().source_marker.startswith("resend-inbound:resend-bounce-1:")
     assert test_db_session.query(BounceEvent).one().diagnostic == "Resend bounce: Undelivered Mail Returned to Sender"
     assert test_db_session.query(AuditLog).filter_by(action="bounce-suppressed").count() == 1
     assert find_new_bounces(test_db_session, [message]) == []
@@ -307,6 +307,51 @@ def test_smtp_failure_import_does_not_change_an_active_campaign(test_db_session)
 
     assert find_new_smtp_failures(test_db_session) == []
     assert test_db_session.get(Recipient, recipient.id).suppressed is False
+
+
+def test_existing_suppression_is_offered_for_later_campaigns(test_db_session):
+    source_campaign = Campaign(name="Original campaign")
+    new_campaign = Campaign(name="Later campaign")
+    active_campaign = Campaign(name="Active campaign", state=CampaignState.sending)
+    test_db_session.add_all([source_campaign, new_campaign, active_campaign])
+    test_db_session.flush()
+    source_recipient = Recipient(
+        campaign_id=source_campaign.id,
+        email="previously-unsubscribed@example.com",
+        normalized_email="previously-unsubscribed@example.com",
+        suppressed=True,
+    )
+    later_recipient = Recipient(
+        campaign_id=new_campaign.id,
+        email="previously-unsubscribed@example.com",
+        normalized_email="previously-unsubscribed@example.com",
+    )
+    active_recipient = Recipient(
+        campaign_id=active_campaign.id,
+        email="previously-unsubscribed@example.com",
+        normalized_email="previously-unsubscribed@example.com",
+    )
+    test_db_session.add_all([source_recipient, later_recipient, active_recipient])
+    test_db_session.add(UnsubscribeEvent(
+        source_event_id=123,
+        email="previously-unsubscribed@example.com",
+        campaign_id=source_campaign.id,
+        campaign=source_campaign.name,
+        reason="Unsubscribed",
+        unsubscribed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ))
+    test_db_session.commit()
+
+    matches = find_inherited_suppressions(test_db_session)
+
+    assert len(matches) == 1
+    assert matches[0].marker == "inherited:unsubscribe:123"
+    assert matches[0].source == "Unsubscribed"
+    assert matches[0].reason == "Inherited from suppression list: Unsubscribed"
+    assert [recipient.id for recipient in matches[0].recipients] == [later_recipient.id]
+    assert apply_suppressions(test_db_session, matches) == 1
+    assert test_db_session.get(Recipient, later_recipient.id).suppressed is True
+    assert test_db_session.get(Recipient, active_recipient.id).suppressed is False
 
 
 def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):

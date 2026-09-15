@@ -6,6 +6,7 @@ read API and records the resulting suppression decision in Mailmerge.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal, init_db
-from .models import AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, Recipient
+from .models import AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, Recipient, UnsubscribeEvent
 
 BOUNCE_SUBJECT = "Undelivered Mail Returned to Sender"
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
@@ -111,21 +112,28 @@ def find_new_bounces(db: Session, messages: Iterable[dict[str, Any]]) -> list[Su
         source_id = message.get("email_id")
         if not isinstance(source_id, str) or not source_id:
             continue
-        candidates = extract_addresses(message)
-        recipients = db.scalars(
-            select(Recipient)
-            .join(Campaign, Recipient.campaign_id == Campaign.id)
-            .where(Recipient.normalized_email.in_(candidates), Campaign.state != CampaignState.sending)
-        ).all() if candidates else []
-        marker = f"resend-inbound:{source_id}"
-        known_bounce = _known_marker(db, marker)
-        recipients = [recipient for recipient in recipients if not recipient.suppressed]
-        if known_bounce or not recipients:
-            continue
-        matches.append(SuppressionMatch(
-            source="Resend bounce", marker=marker, reason=bounce_reason(message),
-            occurred_at=_bounce_received_at(message), recipients=recipients
-        ))
+        for address in extract_addresses(message):
+            # Keep a source event independently reviewable per address. The
+            # digest avoids exceeding the database marker width for long
+            # addresses while preserving idempotency.
+            address_digest = hashlib.sha256(address.encode()).hexdigest()[:16]
+            marker = f"resend-inbound:{source_id}:{address_digest}"
+            if _known_marker(db, marker):
+                continue
+            recipients = db.scalars(
+                select(Recipient)
+                .join(Campaign, Recipient.campaign_id == Campaign.id)
+                .where(
+                    Recipient.normalized_email == address,
+                    ~Recipient.suppressed,
+                    Campaign.state != CampaignState.sending,
+                )
+            ).all()
+            if recipients:
+                matches.append(SuppressionMatch(
+                    source="Resend bounce", marker=marker, reason=bounce_reason(message),
+                    occurred_at=_bounce_received_at(message), recipients=recipients
+                ))
     return matches
 
 
@@ -166,6 +174,55 @@ def find_new_smtp_failures(db: Session) -> list[SuppressionMatch]:
             matches.append(SuppressionMatch(
                 source="SMTP failure", marker=marker, reason=smtp_failure_reason(attempt),
                 occurred_at=attempt.attempted_at, recipients=recipients
+            ))
+    return matches
+
+
+def find_inherited_suppressions(db: Session) -> list[SuppressionMatch]:
+    """Offer existing suppression history for unsuppressed later campaigns.
+
+    The operator still confirms every match. Recipients belonging to a running
+    campaign are excluded so reviewing history cannot change an active send.
+    """
+    history: list[tuple[datetime, str, str, str, str]] = []
+    for event in db.scalars(select(UnsubscribeEvent)).all():
+        history.append((
+            event.unsubscribed_at, event.email,
+            f"inherited:unsubscribe:{event.source_event_id}",
+            "Unsubscribed", event.reason,
+        ))
+    for event, recipient in db.execute(
+        select(BounceEvent, Recipient)
+        .join(Recipient, BounceEvent.recipient_id == Recipient.id)
+    ).all():
+        history.append((
+            event.received_at, recipient.normalized_email,
+            f"inherited:bounce:{event.id}", event.kind,
+            event.diagnostic or event.kind,
+        ))
+
+    latest_by_email: dict[str, tuple[datetime, str, str, str]] = {}
+    for occurred_at, email, marker, source, reason in sorted(history, reverse=True):
+        latest_by_email.setdefault(email, (occurred_at, marker, source, reason))
+
+    matches: list[SuppressionMatch] = []
+    for email, (occurred_at, marker, source, reason) in latest_by_email.items():
+        recipients = db.scalars(
+            select(Recipient)
+            .join(Campaign, Recipient.campaign_id == Campaign.id)
+            .where(
+                Recipient.normalized_email == email,
+                ~Recipient.suppressed,
+                Campaign.state != CampaignState.sending,
+            )
+        ).all()
+        if recipients:
+            matches.append(SuppressionMatch(
+                source=source,
+                marker=marker,
+                reason=f"Inherited from suppression list: {reason}",
+                occurred_at=occurred_at,
+                recipients=recipients,
             ))
     return matches
 
