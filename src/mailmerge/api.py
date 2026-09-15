@@ -24,7 +24,7 @@ from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
 from .models import Attachment, AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
-from .worker import _dispatch_timezone, _window_hours, sent_today
+from .worker import _dispatch_timezone, _window_minutes, sent_today
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
 from .secrets import get_secret, set_secret
@@ -114,6 +114,8 @@ class CampaignIn(BaseModel):
     working_hours_enabled: bool = False
     working_hours_start: int = Field(default=9, ge=0, le=23)
     working_hours_end: int = Field(default=17, ge=0, le=23)
+    working_hours_start_minute: int = Field(default=0, ge=0, le=59)
+    working_hours_end_minute: int = Field(default=0, ge=0, le=59)
     working_hours_timezone: str = "UTC"
     consent_acknowledged: bool = False
     list_unsubscribe_enabled: bool = False
@@ -142,6 +144,8 @@ class CampaignOut(ORMModel):
     working_hours_enabled: bool
     working_hours_start: int
     working_hours_end: int
+    working_hours_start_minute: int
+    working_hours_end_minute: int
     working_hours_timezone: str
     consent_acknowledged: bool
     suppression_synced: bool
@@ -754,17 +758,18 @@ def preflight(campaign: Campaign, db: Session) -> dict:
 
     capacity: dict[str, int] | None = None
     if profile:
-        start_hour, end_hour = _window_hours(campaign, profile)
+        start_minutes, end_minutes = _window_minutes(campaign, profile)
         delay = campaign.delay_seconds if campaign.delay_seconds is not None else 2
         local_now = datetime.now(timezone.utc).astimezone(_dispatch_timezone(campaign, profile))
-        window_end = local_now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
-        within_window = start_hour <= local_now.hour < end_hour
-        window_seconds = int((window_end - local_now).total_seconds()) if within_window else max(0, end_hour - start_hour) * 3600
+        window_end = local_now.replace(hour=end_minutes // 60, minute=end_minutes % 60, second=0, microsecond=0)
+        current_minutes = local_now.hour * 60 + local_now.minute
+        within_window = start_minutes <= current_minutes < end_minutes
+        window_seconds = int((window_end - local_now).total_seconds()) if within_window else max(0, end_minutes - start_minutes) * 60
         window_capacity = profile.daily_cap if delay == 0 else (window_seconds + delay - 1) // delay
         sent = sent_today(db, profile, campaign)
         today_target = min(len(previews), max(0, profile.daily_cap - sent))
         capacity = {"daily_limit": profile.daily_cap, "already_sent_today": sent, "today_target": today_target, "window_capacity": window_capacity}
-        if start_hour >= end_hour:
+        if start_minutes >= end_minutes:
             errors.append("dispatch window end time must be after its start time")
         elif window_capacity < today_target:
             errors.append(f"dispatch window fits only {window_capacity} emails at the configured delay, but {today_target} are due today")

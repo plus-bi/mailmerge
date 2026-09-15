@@ -139,6 +139,20 @@ def test_working_hours_guardrail():
     assert is_within_working_hours(campaign, None, now_utc=sat_noon) is True
 
 
+def test_working_hours_honor_minutes():
+    campaign = Campaign(
+        name="Minute precision",
+        working_hours_start=9,
+        working_hours_start_minute=30,
+        working_hours_end=10,
+        working_hours_end_minute=15,
+        working_hours_timezone="UTC",
+    )
+    assert is_within_working_hours(campaign, None, now_utc=datetime(2026, 8, 26, 9, 29, tzinfo=timezone.utc)) is False
+    assert is_within_working_hours(campaign, None, now_utc=datetime(2026, 8, 26, 9, 30, tzinfo=timezone.utc)) is True
+    assert is_within_working_hours(campaign, None, now_utc=datetime(2026, 8, 26, 10, 15, tzinfo=timezone.utc)) is False
+
+
 @pytest.mark.parametrize("value", ["a@b.example", "first.last+tag@example.com"])
 def test_valid_email(value):
     assert valid_email(value)

@@ -101,6 +101,8 @@ type Campaign = {
   working_hours_enabled: boolean;
   working_hours_start: number;
   working_hours_end: number;
+  working_hours_start_minute: number;
+  working_hours_end_minute: number;
   working_hours_timezone: string;
   consent_acknowledged: boolean;
   suppression_synced: boolean;
@@ -585,6 +587,8 @@ function Dashboard() {
           working_hours_enabled: false,
           working_hours_start: 9,
           working_hours_end: 17,
+          working_hours_start_minute: 0,
+          working_hours_end_minute: 0,
           working_hours_timezone: 'UTC',
         }),
       });
@@ -1490,18 +1494,24 @@ function Dashboard() {
                             <label>Start time</label>
                             <input
                               type="time"
-                              step="3600"
-                              value={`${String(form.working_hours_start ?? 9).padStart(2, '0')}:00`}
-                              onChange={(e) => setForm({ ...form, working_hours_start: parseInt(e.target.value.slice(0, 2)) })}
+                              step="60"
+                              value={`${String(form.working_hours_start ?? 9).padStart(2, '0')}:${String(form.working_hours_start_minute ?? 0).padStart(2, '0')}`}
+                              onChange={(e) => {
+                                const [hour, minute] = e.target.value.split(':').map(Number);
+                                setForm({ ...form, working_hours_start: hour, working_hours_start_minute: minute });
+                              }}
                             />
                           </div>
                           <div className="form-group">
                             <label>End time</label>
                             <input
                               type="time"
-                              step="3600"
-                              value={`${String(form.working_hours_end ?? 17).padStart(2, '0')}:00`}
-                              onChange={(e) => setForm({ ...form, working_hours_end: parseInt(e.target.value.slice(0, 2)) })}
+                              step="60"
+                              value={`${String(form.working_hours_end ?? 17).padStart(2, '0')}:${String(form.working_hours_end_minute ?? 0).padStart(2, '0')}`}
+                              onChange={(e) => {
+                                const [hour, minute] = e.target.value.split(':').map(Number);
+                                setForm({ ...form, working_hours_end: hour, working_hours_end_minute: minute });
+                              }}
                             />
                           </div>
                       </>

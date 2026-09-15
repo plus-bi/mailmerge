@@ -72,6 +72,8 @@ class Campaign(Base):
     working_hours_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     working_hours_start: Mapped[int] = mapped_column(Integer, default=9)
     working_hours_end: Mapped[int] = mapped_column(Integer, default=17)
+    working_hours_start_minute: Mapped[int] = mapped_column(Integer, default=0)
+    working_hours_end_minute: Mapped[int] = mapped_column(Integer, default=0)
     working_hours_timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     consent_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     suppression_synced: Mapped[bool] = mapped_column(Boolean, default=False)

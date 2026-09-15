@@ -45,6 +45,8 @@ def init_db() -> None:
             ("campaigns", "unsubscribe_base_url", "VARCHAR(500)"),
             ("campaigns", "from_name", "VARCHAR(200) DEFAULT ''"),
             ("campaigns", "from_address", "VARCHAR(320) DEFAULT ''"),
+            ("campaigns", "working_hours_start_minute", "INTEGER DEFAULT 0"),
+            ("campaigns", "working_hours_end_minute", "INTEGER DEFAULT 0"),
             ("campaigns", "follow_up_source_id", "VARCHAR"),
             ("campaigns", "is_follow_up", "BOOLEAN DEFAULT 0"),
             ("recipients", "reply_to_message_id", "VARCHAR(255)"),
@@ -85,4 +87,6 @@ def init_db() -> None:
         # loading an older campaign cannot fail response validation.
         conn.execute(text("UPDATE recipients SET thread_references = '[]' WHERE thread_references IS NULL"))
         conn.execute(text("UPDATE unsubscribe_events SET reason = 'Unsubscribed' WHERE reason IS NULL OR reason = ''"))
+        conn.execute(text("UPDATE campaigns SET working_hours_start_minute = 0 WHERE working_hours_start_minute IS NULL"))
+        conn.execute(text("UPDATE campaigns SET working_hours_end_minute = 0 WHERE working_hours_end_minute IS NULL"))
         conn.commit()

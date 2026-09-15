@@ -27,27 +27,30 @@ def _dispatch_timezone(campaign: Campaign, profile: Profile | None) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def _window_hours(campaign: Campaign, profile: Profile | None) -> tuple[int, int]:
-    return campaign.working_hours_start, campaign.working_hours_end
+def _window_minutes(campaign: Campaign, profile: Profile | None) -> tuple[int, int]:
+    start = campaign.working_hours_start * 60 + (campaign.working_hours_start_minute or 0)
+    end = campaign.working_hours_end * 60 + (campaign.working_hours_end_minute or 0)
+    return start, end
 
 
 def is_within_working_hours(campaign: Campaign, profile: Profile | None, now_utc: datetime | None = None) -> bool:
     """Whether now is inside the configured daily dispatch window (every day)."""
     tz = _dispatch_timezone(campaign, profile)
-    start_hour, end_hour = _window_hours(campaign, profile)
-    if start_hour >= end_hour:
+    start_minutes, end_minutes = _window_minutes(campaign, profile)
+    if start_minutes >= end_minutes:
         return False
 
     current_local = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
-    return start_hour <= current_local.hour < end_hour
+    current_minutes = current_local.hour * 60 + current_local.minute
+    return start_minutes <= current_minutes < end_minutes
 
 
 def next_dispatch_start(campaign: Campaign, profile: Profile, now_utc: datetime | None = None) -> datetime:
     tz = _dispatch_timezone(campaign, profile)
-    start_hour, end_hour = _window_hours(campaign, profile)
+    start_minutes, end_minutes = _window_minutes(campaign, profile)
     current = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
-    candidate = current.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-    if current >= current.replace(hour=end_hour, minute=0, second=0, microsecond=0):
+    candidate = current.replace(hour=start_minutes // 60, minute=start_minutes % 60, second=0, microsecond=0)
+    if current >= current.replace(hour=end_minutes // 60, minute=end_minutes % 60, second=0, microsecond=0):
         candidate += timedelta(days=1)
     elif current >= candidate:
         return current.astimezone(timezone.utc)
@@ -114,9 +117,9 @@ def process_campaign(campaign_id: str) -> None:
                     break
                 if sent_today(db, profile, campaign) >= profile.daily_cap:
                     tz = _dispatch_timezone(campaign, profile)
-                    start_hour, _ = _window_hours(campaign, profile)
+                    start_minutes, _ = _window_minutes(campaign, profile)
                     tomorrow = (datetime.now(timezone.utc).astimezone(tz) + timedelta(days=1)).replace(
-                        hour=start_hour, minute=0, second=0, microsecond=0
+                        hour=start_minutes // 60, minute=start_minutes % 60, second=0, microsecond=0
                     )
                     campaign.state = CampaignState.scheduled
                     campaign.scheduled_at = tomorrow.astimezone(timezone.utc)
