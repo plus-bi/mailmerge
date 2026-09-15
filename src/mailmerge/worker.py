@@ -58,16 +58,43 @@ def next_dispatch_start(campaign: Campaign, profile: Profile, now_utc: datetime 
 
 
 def sent_today(db, profile: Profile, campaign: Campaign, now_utc: datetime | None = None) -> int:
-    tz = _dispatch_timezone(campaign, profile)
-    current = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
-    start = current.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    end = start + timedelta(days=1)
+    """Successful sends by this profile in the preceding rolling 24 hours.
+
+    The historical name is retained for API compatibility; it is intentionally
+    not a calendar-day count.
+    """
+    current = now_utc or datetime.now(timezone.utc)
+    start = current - timedelta(hours=24)
     return db.scalar(
         select(func.count()).select_from(DeliveryAttempt)
         .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
         .join(Campaign, Recipient.campaign_id == Campaign.id)
-        .where(Campaign.profile_id == profile.id, DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at < end)
+        .where(Campaign.profile_id == profile.id, DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at <= current)
     ) or 0
+
+
+def next_profile_send_slot(db, profile: Profile, campaign: Campaign, now_utc: datetime | None = None) -> datetime | None:
+    """Return when the next rolling-cap slot opens, or None when one is free."""
+    current = now_utc or datetime.now(timezone.utc)
+    start = current - timedelta(hours=24)
+    sent_attempts = db.scalars(
+        select(DeliveryAttempt.attempted_at)
+        .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
+        .join(Campaign, Recipient.campaign_id == Campaign.id)
+        .where(
+            Campaign.profile_id == profile.id,
+            DeliveryAttempt.outcome == "sent",
+            DeliveryAttempt.attempted_at >= start,
+            DeliveryAttempt.attempted_at <= current,
+        )
+        .order_by(DeliveryAttempt.attempted_at.asc())
+    ).all()
+    if len(sent_attempts) < profile.daily_cap:
+        return None
+    oldest = sent_attempts[0]
+    if oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=timezone.utc)
+    return oldest + timedelta(hours=24)
 
 
 def process_campaign(campaign_id: str) -> None:
@@ -115,14 +142,10 @@ def process_campaign(campaign_id: str) -> None:
                     campaign.scheduled_at = next_dispatch_start(campaign, profile)
                     db.commit()
                     break
-                if sent_today(db, profile, campaign) >= profile.daily_cap:
-                    tz = _dispatch_timezone(campaign, profile)
-                    start_minutes, _ = _window_minutes(campaign, profile)
-                    tomorrow = (datetime.now(timezone.utc).astimezone(tz) + timedelta(days=1)).replace(
-                        hour=start_minutes // 60, minute=start_minutes % 60, second=0, microsecond=0
-                    )
+                next_slot = next_profile_send_slot(db, profile, campaign)
+                if next_slot:
                     campaign.state = CampaignState.scheduled
-                    campaign.scheduled_at = tomorrow.astimezone(timezone.utc)
+                    campaign.scheduled_at = next_dispatch_start(campaign, profile, next_slot)
                     db.commit()
                     break
 

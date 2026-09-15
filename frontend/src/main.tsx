@@ -1107,7 +1107,7 @@ function Dashboard() {
                       <input id="profile-reply-to" type="email" value={profileForm.reply_to || ''} onChange={(e) => setProfileForm({ ...profileForm, reply_to: e.target.value })} placeholder="replies@example.com" />
                     </div>
                     <div className="form-group">
-                      <label htmlFor="profile-daily-cap">Daily cap</label>
+                      <label htmlFor="profile-daily-cap">Rolling 24-hour cap</label>
                       <input id="profile-daily-cap" type="number" min={1} value={profileForm.daily_cap} onChange={(e) => setProfileForm({ ...profileForm, daily_cap: Number(e.target.value) })} />
                     </div>
                     <div className="form-group">

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -113,3 +113,26 @@ def test_worker_completes_when_all_sendable_recipients_are_sent(test_db_session,
     assert not hasattr(sent_recipient, "rendered_subject")
     assert not hasattr(sent_recipient, "rendered_markdown")
     assert test_db_session.get(Recipient, excluded.id).status == "pending"
+
+
+def test_profile_daily_cap_uses_a_rolling_24_hour_window(test_db_session):
+    profile = Profile(name="Rolling cap", smtp_host="localhost", smtp_port=1025, security="none", daily_cap=2)
+    test_db_session.add(profile)
+    test_db_session.flush()
+    campaign = Campaign(name="Rolling source", profile_id=profile.id)
+    target = Campaign(name="Rolling target", profile_id=profile.id)
+    test_db_session.add_all([campaign, target])
+    test_db_session.flush()
+    first = Recipient(campaign_id=campaign.id, email="one@example.com", normalized_email="one@example.com")
+    second = Recipient(campaign_id=campaign.id, email="two@example.com", normalized_email="two@example.com")
+    test_db_session.add_all([first, second])
+    test_db_session.flush()
+    now = datetime(2026, 9, 15, 20, 30, tzinfo=timezone.utc)
+    test_db_session.add_all([
+        DeliveryAttempt(recipient_id=first.id, outcome="sent", attempted_at=now - timedelta(hours=23, minutes=50)),
+        DeliveryAttempt(recipient_id=second.id, outcome="sent", attempted_at=now - timedelta(hours=23, minutes=40)),
+    ])
+    test_db_session.commit()
+
+    assert worker.sent_today(test_db_session, profile, target, now) == 2
+    assert worker.next_profile_send_slot(test_db_session, profile, target, now) == now + timedelta(minutes=10)

@@ -10,7 +10,7 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
 - 🔍 **Strict Template Variable Validation**: Jinja2 AST analyzes your subject and body templates to guarantee that all required variables are populated for every recipient before sending.
 - 👁️ **Live Per-Recipient Previews**: Interactive previewer rendering the exact Subject, HTML, and Plain-text message side-by-side with raw JSON values.
 - ✉️ **Send Test Email to Me**: Dispatch instant sample test emails to verify layout and headers in your actual inbox before campaign launch.
-- ⏱️ **Dispatch Windows & Daily Caps**: Configure inter-message delays and a daily start/end window; recipients above the daily cap roll into the next day's window automatically.
+- ⏱️ **Dispatch Windows & Rolling Caps**: Configure inter-message delays and a dispatch window; recipients above the rolling 24-hour cap resume when the next send slot becomes available.
 - 🛡️ **Unsubscribe Suppression Management**: Review RFC 8058 one-click and signed unsubscribe requests, then manually synchronize them into the suppression database from the dashboard.
 - 📬 **Bounce Suppression Import**: Import DSN bounces from the independent Resend inbound monitor with `mailmerge-import-bounces`.
 
