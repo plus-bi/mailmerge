@@ -24,6 +24,8 @@ from mailmerge.api import (
     list_suppressions,
     review_suppressions,
     apply_suppression_candidates,
+    add_manual_suppression,
+    ManualSuppressionIn,
     SuppressionApplyIn,
     preflight,
     preview_recipient,
@@ -36,7 +38,7 @@ from mailmerge.api import (
 from mailmerge.config import settings
 from mailmerge.bounce_import import apply_suppressions, find_inherited_suppressions, find_new_bounces, find_new_smtp_failures
 from mailmerge.db import Base, get_db
-from mailmerge.models import AuditLog, BounceEvent, Campaign, DeliveryAttempt, Profile, Recipient, CampaignState, UnsubscribeEvent, recipient_domain_ordering
+from mailmerge.models import AuditLog, BounceEvent, Campaign, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, CampaignState, UnsubscribeEvent, recipient_domain_ordering
 from mailmerge.suppression import sync_suppressions
 from fastapi import FastAPI, HTTPException
 
@@ -352,6 +354,42 @@ def test_existing_suppression_is_offered_for_later_campaigns(test_db_session):
     assert apply_suppressions(test_db_session, matches) == 1
     assert test_db_session.get(Recipient, later_recipient.id).suppressed is True
     assert test_db_session.get(Recipient, active_recipient.id).suppressed is False
+
+
+def test_manual_suppression_is_listed_and_inherited(test_db_session):
+    campaign = Campaign(name="Manual source")
+    active_campaign = Campaign(name="Manual active", state=CampaignState.sending)
+    test_db_session.add_all([campaign, active_campaign])
+    test_db_session.flush()
+    recipient = Recipient(campaign_id=campaign.id, email="reply@example.com", normalized_email="reply@example.com")
+    active_recipient = Recipient(campaign_id=active_campaign.id, email="reply@example.com", normalized_email="reply@example.com")
+    test_db_session.add_all([recipient, active_recipient])
+    test_db_session.commit()
+
+    result = add_manual_suppression(
+        ManualSuppressionIn(email="Reply@Example.com", reason="Not interested", campaign_id=campaign.id),
+        test_db_session,
+    )
+
+    assert result == {"ok": True, "suppressed": 1}
+    assert test_db_session.get(Recipient, recipient.id).suppressed is True
+    assert test_db_session.get(Recipient, active_recipient.id).suppressed is False
+    event = test_db_session.query(ManualSuppressionEvent).one()
+    assert (event.email, event.reason, event.campaign) == ("reply@example.com", "Not interested", "Manual source")
+    listed = list_suppressions(test_db_session)["events"]
+    assert any(row["suppression_type"] == "Manual" and row["email"] == "reply@example.com" for row in listed)
+
+    future_campaign = Campaign(name="Manual future")
+    test_db_session.add(future_campaign)
+    test_db_session.flush()
+    future_recipient = Recipient(campaign_id=future_campaign.id, email="reply@example.com", normalized_email="reply@example.com")
+    test_db_session.add(future_recipient)
+    test_db_session.commit()
+    matches = find_inherited_suppressions(test_db_session)
+
+    assert len(matches) == 1
+    assert matches[0].source == "Manual"
+    assert matches[0].recipients == [future_recipient]
 
 
 def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):

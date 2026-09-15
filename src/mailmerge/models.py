@@ -155,6 +155,16 @@ class BounceEvent(Base):
     recognized: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class ManualSuppressionEvent(Base):
+    __tablename__ = "manual_suppression_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    campaign_id: Mapped[str | None] = mapped_column(String, index=True)
+    campaign: Mapped[str] = mapped_column(String(200), default="")
+    reason: Mapped[str] = mapped_column(Text, default="Manually added")
+    suppressed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
 class SyncCursor(Base):
     __tablename__ = "sync_cursors"
     name: Mapped[str] = mapped_column(String, primary_key=True)

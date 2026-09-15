@@ -270,6 +270,9 @@ function Dashboard() {
   const [suppressionLoading, setSuppressionLoading] = useState(false);
   const [suppressionCandidates, setSuppressionCandidates] = useState<SuppressionCandidate[]>([]);
   const [selectedSuppressionMarkers, setSelectedSuppressionMarkers] = useState<Set<string>>(new Set());
+  const [manualSuppressionEmail, setManualSuppressionEmail] = useState('');
+  const [manualSuppressionReason, setManualSuppressionReason] = useState('Not interested');
+  const [manualSuppressionOpen, setManualSuppressionOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'template' | 'recipients' | 'preview' | 'send' | 'status' | 'unsubscribed'>('template');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -825,6 +828,34 @@ function Dashboard() {
       await loadSuppressions();
       if (selected) await loadRecipients(selected.id);
       notify(`Added ${result.suppressed} recipient record${result.suppressed === 1 ? '' : 's'} to the suppression list.`);
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setSuppressionLoading(false);
+    }
+  };
+
+  const addManualSuppression = async () => {
+    if (!manualSuppressionEmail.trim()) {
+      notify('Enter an email address to suppress.', true);
+      return;
+    }
+    setSuppressionLoading(true);
+    try {
+      const result = await api('/suppressions/manual', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: manualSuppressionEmail,
+          reason: manualSuppressionReason,
+          campaign_id: selected?.id || null,
+        }),
+      });
+      setManualSuppressionEmail('');
+      setManualSuppressionReason('Not interested');
+      setManualSuppressionOpen(false);
+      await loadSuppressions();
+      if (selected) await loadRecipients(selected.id);
+      notify(`Added manual suppression. ${result.suppressed} existing recipient record${result.suppressed === 1 ? '' : 's'} updated.`);
     } catch (e: any) {
       notify(e.message, true);
     } finally {
@@ -1882,14 +1913,31 @@ function Dashboard() {
                       </p>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <button onClick={handleSyncSuppressions} disabled={suppressionLoading} style={{ whiteSpace: 'nowrap' }}>
-                        {suppressionLoading ? 'Reviewing…' : '↻ Sync & review'}
-                      </button>
+                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                        <button onClick={() => setManualSuppressionOpen((open) => !open)} disabled={suppressionLoading}>+ Add email</button>
+                        <button onClick={handleSyncSuppressions} disabled={suppressionLoading} style={{ whiteSpace: 'nowrap' }}>
+                          {suppressionLoading ? 'Reviewing…' : '↻ Sync & review'}
+                        </button>
+                      </div>
                       <div style={{ marginTop: '7px', fontSize: '0.78rem', color: '#5e6b62' }}>
                         Last synced: {lastSuppressionSync ? new Date(lastSuppressionSync).toLocaleString() : 'Never'}
                       </div>
                     </div>
                   </div>
+
+                  {manualSuppressionOpen && (
+                    <div className="card" style={{ marginTop: '16px' }}>
+                      <h3 style={{ margin: '0 0 10px', fontSize: '1rem' }}>Add manual suppression</h3>
+                      <div className="form-grid">
+                        <label>Email address<input type="email" value={manualSuppressionEmail} onChange={(e) => setManualSuppressionEmail(e.target.value)} placeholder="person@example.com" /></label>
+                        <label>Reason (optional)<input value={manualSuppressionReason} onChange={(e) => setManualSuppressionReason(e.target.value)} placeholder="Not interested" /></label>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                        <button onClick={addManualSuppression} disabled={suppressionLoading}>Add to suppression list</button>
+                        <button onClick={() => setManualSuppressionOpen(false)} disabled={suppressionLoading}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
 
                   {suppressionCandidates.length > 0 && (
                     <div className="card" style={{ marginTop: '16px' }}>

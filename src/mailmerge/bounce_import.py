@@ -21,7 +21,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal, init_db
-from .models import AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, Recipient, UnsubscribeEvent
+from .models import AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Recipient, UnsubscribeEvent
 
 BOUNCE_SUBJECT = "Undelivered Mail Returned to Sender"
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
@@ -190,6 +190,11 @@ def find_inherited_suppressions(db: Session) -> list[SuppressionMatch]:
             event.unsubscribed_at, event.email,
             f"inherited:unsubscribe:{event.source_event_id}",
             "Unsubscribed", event.reason,
+        ))
+    for event in db.scalars(select(ManualSuppressionEvent)).all():
+        history.append((
+            event.suppressed_at, event.email,
+            f"inherited:manual:{event.id}", "Manual", event.reason,
         ))
     for event, recipient in db.execute(
         select(BounceEvent, Recipient)

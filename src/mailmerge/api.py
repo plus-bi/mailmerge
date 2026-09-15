@@ -23,7 +23,7 @@ from .config import settings
 from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
-from .models import Attachment, AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
+from .models import Attachment, AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
 from .worker import _dispatch_timezone, _window_hours, sent_today
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
@@ -192,6 +192,25 @@ class SuppressionReviewOut(BaseModel):
 
 class SuppressionApplyIn(BaseModel):
     markers: list[str]
+
+
+class ManualSuppressionIn(BaseModel):
+    email: str
+    reason: str = Field(default="Manually added", max_length=240)
+    campaign_id: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        email = value.strip().lower()
+        if "@" not in email or email.startswith("@") or email.endswith("@"):
+            raise ValueError("enter a valid email address")
+        return email
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        return value.strip() or "Manually added"
 
 
 class RecipientOut(ORMModel):
@@ -837,6 +856,16 @@ def list_suppressions(db: Session = Depends(get_db)):
         }
         for event in unsubscribe_events
     ]
+    for event in db.scalars(select(ManualSuppressionEvent).order_by(ManualSuppressionEvent.suppressed_at.desc())).all():
+        events.append({
+            "source_event_id": f"manual:{event.id}",
+            "email": event.email,
+            "campaign_id": event.campaign_id,
+            "campaign": event.campaign,
+            "suppression_type": "Manual",
+            "reason": event.reason,
+            "unsubscribed_at": event.suppressed_at,
+        })
     for event in bounce_events:
         recipient = db.get(Recipient, event.recipient_id) if event.recipient_id else None
         if recipient:
@@ -922,6 +951,37 @@ def apply_suppression_candidates(data: SuppressionApplyIn, db: Session = Depends
     updated = apply_suppressions(db, selected)
     db.commit()
     return {"ok": True, "suppressed": updated}
+
+
+@router.post("/suppressions/manual")
+def add_manual_suppression(data: ManualSuppressionIn, db: Session = Depends(get_db)):
+    if db.scalar(select(ManualSuppressionEvent).where(ManualSuppressionEvent.email == data.email)):
+        raise HTTPException(409, "this email is already in the manual suppression list")
+    campaign = _campaign(db, data.campaign_id) if data.campaign_id else None
+    recipients = db.scalars(
+        select(Recipient)
+        .join(Campaign, Recipient.campaign_id == Campaign.id)
+        .where(
+            Recipient.normalized_email == data.email,
+            ~Recipient.suppressed,
+            Campaign.state != CampaignState.sending,
+        )
+    ).all()
+    for recipient in recipients:
+        recipient.suppressed = True
+        db.add(AuditLog(
+            campaign_id=recipient.campaign_id,
+            action="manual-suppressed",
+            detail={"email": data.email, "reason": data.reason},
+        ))
+    db.add(ManualSuppressionEvent(
+        email=data.email,
+        reason=data.reason,
+        campaign_id=campaign.id if campaign else None,
+        campaign=campaign.name if campaign else "",
+    ))
+    db.commit()
+    return {"ok": True, "suppressed": len(recipients)}
 
 
 @router.post("/suppressions/sync")
