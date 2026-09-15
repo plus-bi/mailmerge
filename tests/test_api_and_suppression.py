@@ -30,8 +30,9 @@ from mailmerge.api import (
     update_campaign,
 )
 from mailmerge.config import settings
+from mailmerge.bounce_import import apply_suppressions, find_new_bounces, find_new_smtp_failures
 from mailmerge.db import Base, get_db
-from mailmerge.models import Campaign, Profile, Recipient, CampaignState, recipient_domain_ordering
+from mailmerge.models import AuditLog, BounceEvent, Campaign, DeliveryAttempt, Profile, Recipient, CampaignState, recipient_domain_ordering
 from mailmerge.suppression import sync_suppressions
 from fastapi import FastAPI, HTTPException
 
@@ -195,6 +196,66 @@ def test_recipients_sort_by_domain_then_local_part(test_db_session):
     ).all()
 
     assert [recipient.email for recipient in emails] == ["amy@alpha.example", "bob@alpha.example", "zoe@bravo.example"]
+
+
+def test_resend_bounce_import_suppresses_matching_recipients_idempotently(test_db_session):
+    campaign = Campaign(name="Bounce source")
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    recipient = Recipient(campaign_id=campaign.id, email="failed@example.com", normalized_email="failed@example.com")
+    test_db_session.add(recipient)
+    test_db_session.commit()
+    message = {
+        "email_id": "resend-bounce-1",
+        "text_body": "Final-Recipient: rfc822; failed@example.com",
+        "headers_json": "{}",
+        "message_json": "{}",
+    }
+
+    matches = find_new_bounces(test_db_session, [message])
+    addresses = sorted({recipient.normalized_email for match in matches for recipient in match.recipients})
+    updated = apply_suppressions(test_db_session, matches)
+    test_db_session.commit()
+
+    assert (updated, addresses) == (1, ["failed@example.com"])
+    assert test_db_session.get(Recipient, recipient.id).suppressed is True
+    assert test_db_session.query(BounceEvent).count() == 1
+    assert test_db_session.query(BounceEvent).one().kind == "Resend bounce"
+    assert test_db_session.query(AuditLog).filter_by(action="bounce-suppressed").count() == 1
+    assert find_new_bounces(test_db_session, [message]) == []
+
+
+def test_smtp_failure_import_suppresses_matching_recipients(test_db_session):
+    campaign = Campaign(name="SMTP failure source")
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    recipient = Recipient(campaign_id=campaign.id, email="smtp-failed@example.com", normalized_email="smtp-failed@example.com", status="failed")
+    test_db_session.add(recipient)
+    test_db_session.flush()
+    test_db_session.add(DeliveryAttempt(recipient_id=recipient.id, outcome="permanent", smtp_code=550, detail="recipient rejected"))
+    test_db_session.commit()
+
+    matches = find_new_smtp_failures(test_db_session)
+    updated = apply_suppressions(test_db_session, matches)
+    test_db_session.commit()
+
+    assert updated == 1
+    assert test_db_session.get(Recipient, recipient.id).suppressed is True
+    assert find_new_smtp_failures(test_db_session) == []
+
+
+def test_smtp_failure_import_does_not_change_an_active_campaign(test_db_session):
+    campaign = Campaign(name="Active campaign", state=CampaignState.sending)
+    test_db_session.add(campaign)
+    test_db_session.flush()
+    recipient = Recipient(campaign_id=campaign.id, email="active@example.com", normalized_email="active@example.com", status="failed")
+    test_db_session.add(recipient)
+    test_db_session.flush()
+    test_db_session.add(DeliveryAttempt(recipient_id=recipient.id, outcome="permanent", smtp_code=550, detail="recipient rejected"))
+    test_db_session.commit()
+
+    assert find_new_smtp_failures(test_db_session) == []
+    assert test_db_session.get(Recipient, recipient.id).suppressed is False
 
 
 def test_preflight_rejects_daily_target_that_does_not_fit_dispatch_window(test_db_session):

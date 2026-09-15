@@ -165,5 +165,6 @@ class UnsubscribeEvent(Base):
     email: Mapped[str] = mapped_column(String(320), index=True)
     campaign_id: Mapped[str | None] = mapped_column(String, index=True)
     campaign: Mapped[str] = mapped_column(String(200), index=True)
+    reason: Mapped[str] = mapped_column(String(100), default="Unsubscribed")
     unsubscribed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

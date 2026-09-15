@@ -157,10 +157,11 @@ type UnsubscribeConfig = {
 };
 
 type UnsubscribeEvent = {
-  source_event_id: number;
+  source_event_id: string;
   email: string;
   campaign_id: string | null;
   campaign: string;
+  reason: string;
   unsubscribed_at: string;
 };
 
@@ -502,6 +503,13 @@ function Dashboard() {
     const timer = window.setInterval(() => void loadCampaignStatuses(), 5000);
     return () => window.clearInterval(timer);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!selectedId || selected?.state !== 'sending') return;
+    void loadRecipients(selectedId);
+    const timer = window.setInterval(() => void loadRecipients(selectedId), 5000);
+    return () => window.clearInterval(timer);
+  }, [selectedId, selected?.state]);
 
   useEffect(() => {
     if (activeTab === 'unsubscribed') void loadSuppressions();
@@ -1806,9 +1814,9 @@ function Dashboard() {
                 <div>
                   <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '20px' }}>
                     <div>
-                      <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem' }}>Unsubscribed Addresses</h3>
+                      <h3 style={{ margin: '0 0 6px', fontSize: '1.05rem' }}>Suppressed Addresses</h3>
                       <p style={{ margin: 0, fontSize: '0.85rem', color: '#5e6b62' }}>
-                        Synchronization is manual. Click the button to fetch new opt-outs and suppress matching recipients.
+                        Synchronization is manual. The list includes opt-outs, Resend bounces, and SMTP delivery failures.
                       </p>
                     </div>
                     <div style={{ textAlign: 'right' }}>
@@ -1826,14 +1834,16 @@ function Dashboard() {
                       <thead>
                         <tr>
                           <th>Email address</th>
+                          <th>Reason</th>
                           <th>Campaign</th>
-                          <th>Unsubscribed</th>
+                          <th>Suppressed</th>
                         </tr>
                       </thead>
                       <tbody>
                         {unsubscribeEvents.map((event) => (
                           <tr key={event.source_event_id}>
                             <td><strong>{event.email}</strong></td>
+                            <td>{event.reason}</td>
                             <td>
                               <strong>{event.campaign || 'Unknown'}</strong>
                               {event.campaign_id && (
@@ -1845,8 +1855,8 @@ function Dashboard() {
                         ))}
                         {!suppressionLoading && unsubscribeEvents.length === 0 && (
                           <tr>
-                            <td colSpan={3} style={{ textAlign: 'center', color: '#888' }}>
-                              No unsubscribe events have been synchronized yet.
+                            <td colSpan={4} style={{ textAlign: 'center', color: '#888' }}>
+                              No suppressed addresses have been recorded yet.
                             </td>
                           </tr>
                         )}

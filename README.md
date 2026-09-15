@@ -12,6 +12,24 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
 - ✉️ **Send Test Email to Me**: Dispatch instant sample test emails to verify layout and headers in your actual inbox before campaign launch.
 - ⏱️ **Dispatch Windows & Daily Caps**: Configure inter-message delays and a daily start/end window; recipients above the daily cap roll into the next day's window automatically.
 - 🛡️ **Unsubscribe Suppression Management**: Review RFC 8058 one-click and signed unsubscribe requests, then manually synchronize them into the suppression database from the dashboard.
+- 📬 **Bounce Suppression Import**: Import DSN bounces from the independent Resend inbound monitor with `mailmerge-import-bounces`.
+
+To import standard `Undelivered Mail Returned to Sender` notifications and
+final SMTP delivery failures, set the monitor token only in the process
+environment, preview matching recipients, then run the import:
+
+```bash
+export MAILMERGE_RESEND_MONITOR_API_TOKEN='…'
+mailmerge-import-bounces
+```
+
+The command calls the local Resend monitor API by default. Use
+`--monitor-url` only when it is hosted elsewhere. It records each inbound
+bounce or final SMTP failure idempotently and suppresses matching recipients
+across existing campaigns only after it lists new addresses by source and
+receives an interactive `yes` confirmation. Use `--dry-run` to list without
+prompting. It deliberately does not change recipients in a campaign that is
+currently sending. It never prints the monitor token or message contents.
 - 🔒 **Zero Tracking & Secure Credentials**: No tracking pixels, open beacons, or URL rewrites. Passwords and tokens are stored in the OS Secret Service / Keyring.
 
 ---

@@ -52,6 +52,7 @@ def init_db() -> None:
             ("recipients", "thread_references", "JSON"),
             ("recipients", "exclusion_reason", "TEXT"),
             ("unsubscribe_events", "campaign_id", "VARCHAR"),
+            ("unsubscribe_events", "reason", "VARCHAR(100) DEFAULT 'Unsubscribed'"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
@@ -82,4 +83,5 @@ def init_db() -> None:
         # contract correctly exposes a list. Normalize them during startup so
         # loading an older campaign cannot fail response validation.
         conn.execute(text("UPDATE recipients SET thread_references = '[]' WHERE thread_references IS NULL"))
+        conn.execute(text("UPDATE unsubscribe_events SET reason = 'Unsubscribed' WHERE reason IS NULL OR reason = ''"))
         conn.commit()

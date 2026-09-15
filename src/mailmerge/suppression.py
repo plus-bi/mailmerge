@@ -98,6 +98,7 @@ def sync_suppressions(db: Session, sync_url: str | None = None, sync_secret: str
                         email=norm_email,
                         campaign_id=campaign.id if campaign else source_campaign or None,
                         campaign=campaign.name if campaign else source_campaign,
+                        reason="Unsubscribed",
                         unsubscribed_at=datetime.fromtimestamp(int(created_at), timezone.utc),
                     )
                 )

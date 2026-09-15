@@ -31,6 +31,7 @@ mailmerge = "mailmerge.main:run"
 mailmerge-worker = "mailmerge.worker:run"
 mailmerge-unsubscribe = "unsubscribe_service.main:run"
 mailmerge-test-email = "mailmerge.test_email:run"
+mailmerge-import-bounces = "mailmerge.bounce_import:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mailmerge", "src/unsubscribe_service"]

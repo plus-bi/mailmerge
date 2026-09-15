@@ -23,7 +23,7 @@ from .config import settings
 from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
 from .messages import build_message
-from .models import Attachment, AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
+from .models import Attachment, AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
 from .worker import _dispatch_timezone, _window_hours, sent_today
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
 from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
@@ -159,10 +159,11 @@ class CampaignStatusOut(BaseModel):
 
 
 class UnsubscribeEventOut(ORMModel):
-    source_event_id: int
+    source_event_id: str
     email: str
     campaign_id: str | None
     campaign: str
+    reason: str
     unsubscribed_at: datetime
 
 
@@ -798,9 +799,33 @@ def trigger_suppression_sync(campaign_id: str, db: Session = Depends(get_db)):
 
 @router.get("/suppressions", response_model=SuppressionListOut)
 def list_suppressions(db: Session = Depends(get_db)):
-    events = db.scalars(
+    unsubscribe_events = db.scalars(
         select(UnsubscribeEvent).order_by(UnsubscribeEvent.unsubscribed_at.desc())
     ).all()
+    bounce_events = db.scalars(select(BounceEvent).order_by(BounceEvent.received_at.desc())).all()
+    events = [
+        {
+            "source_event_id": f"unsubscribe:{event.source_event_id}",
+            "email": event.email,
+            "campaign_id": event.campaign_id,
+            "campaign": event.campaign,
+            "reason": event.reason,
+            "unsubscribed_at": event.unsubscribed_at,
+        }
+        for event in unsubscribe_events
+    ]
+    for event in bounce_events:
+        recipient = db.get(Recipient, event.recipient_id) if event.recipient_id else None
+        if recipient:
+            events.append({
+                "source_event_id": f"bounce:{event.id}",
+                "email": recipient.normalized_email,
+                "campaign_id": recipient.campaign_id,
+                "campaign": db.get(Campaign, recipient.campaign_id).name if db.get(Campaign, recipient.campaign_id) else "",
+                "reason": event.kind,
+                "unsubscribed_at": event.received_at,
+            })
+    events.sort(key=lambda event: event["unsubscribed_at"], reverse=True)
     cursor = db.get(SyncCursor, "unsubscribe_service")
     return {"events": events, "last_synced_at": cursor.updated_at if cursor else None}
 
