@@ -201,7 +201,10 @@ def process_campaign(campaign_id: str) -> None:
                     Recipient.status == "failed",
                 )
             ) or 0
-            campaign.state = CampaignState.failed if failed_count else CampaignState.completed
+            # A permanent rejection belongs to the recipient, not the whole
+            # campaign. Once no recipient remains pending/retrying, the
+            # dispatch is terminal and follow-ups may safely use its sent set.
+            campaign.state = CampaignState.completed
             db.add(
                 AuditLog(
                     campaign_id=campaign.id,

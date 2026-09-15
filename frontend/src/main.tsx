@@ -1857,11 +1857,14 @@ function Dashboard() {
                           const sent = campaign.counts.sent || 0;
                           const failed = campaign.counts.failed || 0;
                           const processed = sent + failed;
+                          const stateLabel = campaign.state === 'completed' && failed > 0
+                            ? 'completed (delivery failures)'
+                            : campaign.state;
                           return (
                             <tr key={campaign.id}>
                               <td><strong>{campaign.name}</strong></td>
                               <td>{new Date(campaign.scheduled_at).toLocaleString()}</td>
-                              <td><span className={`badge badge-${campaign.state}`}>{campaign.state}</span></td>
+                              <td><span className={`badge badge-${campaign.state}`}>{stateLabel}</span></td>
                               <td>{processed} / {campaign.total}</td>
                               <td>{sent}</td>
                               <td>{failed}</td>

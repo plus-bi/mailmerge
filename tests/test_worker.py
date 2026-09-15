@@ -39,13 +39,15 @@ def _scheduled_campaign(test_db_session, *, name: str) -> Campaign:
         subject_template="Hello {{ name }}",
         body_template="Hi **{{ name }}**",
         list_unsubscribe_enabled=True,
+        working_hours_start=0,
+        working_hours_end=23,
     )
     test_db_session.add(campaign)
     test_db_session.flush()
     return campaign
 
 
-def test_worker_records_delivery_failure_and_marks_campaign_failed(test_db_session, monkeypatch):
+def test_worker_records_delivery_failure_and_completes_campaign(test_db_session, monkeypatch):
     campaign = _scheduled_campaign(test_db_session, name="Failed run")
     recipient = Recipient(
         campaign_id=campaign.id,
@@ -69,7 +71,7 @@ def test_worker_records_delivery_failure_and_marks_campaign_failed(test_db_sessi
     worker.process_campaign(campaign.id)
 
     test_db_session.expire_all()
-    assert test_db_session.get(Campaign, campaign.id).state == CampaignState.failed
+    assert test_db_session.get(Campaign, campaign.id).state == CampaignState.completed
     failed_recipient = test_db_session.get(Recipient, recipient.id)
     assert failed_recipient.status == "failed"
     attempt = test_db_session.query(DeliveryAttempt).filter_by(recipient_id=recipient.id).one()
