@@ -210,6 +210,28 @@ For marketing and outreach campaigns:
    - Open the **Unsubscribed** tab and click **Sync Unsubscribe List**.
    - Mailmerge lists the email, campaign, and unsubscribe time, shows the most recent sync time beneath the button, and marks matching recipients as `suppressed = True`.
 
+## Scheduled Individual Emails
+
+Use **Individual emails** in the header for one-off messages that should not become campaign follow-ups. Enter one JSON object, or an array of independently scheduled objects:
+
+```json
+{
+  "email": "person@example.com",
+  "subject": "Following up",
+  "body": "Hi,\n\nI wanted to follow up on my earlier email.",
+  "scheduled_at": "2026-09-30T09:00:00+02:00",
+  "profile_id": "sender-profile-id",
+  "body_mode": "markdown"
+}
+```
+
+1. Click **Live preview** to validate the payload and inspect the rendered HTML, plain text, headers, sender profile, and local send time.
+2. Click **Run preflight** to repeat validation, check suppression history and message size, and confirm SMTP connectivity.
+3. Click **Confirm schedule**. The app displays the confirmed local send time.
+4. Select a saved email to preview, edit/reschedule, or cancel it before sending begins.
+
+`email`, `subject`, `body`, `scheduled_at`, and `profile_id` are required. `scheduled_at` must be a future ISO 8601 timestamp with a timezone offset. `body_mode` is optional and defaults to `markdown`. Individual sends count toward the selected profile's rolling 24-hour cap; if the cap is full at send time, the worker moves the job to the next available slot.
+
 ---
 
 ## Troubleshooting & FAQ

@@ -290,3 +290,25 @@ Performs a lifecycle transition action (`pause`, `resume`, `cancel`, `confirm-ov
 
 ### `GET /campaigns/{campaign_id}/events`
 Server-Sent Events (SSE) stream streaming real-time status and delivery counts (`sent`, `pending`, `retry`, `failed`).
+
+---
+
+## 9. Scheduled Individual Emails
+
+### `POST /scheduled-emails/preview`
+Validates and renders one JSON object or an array without saving it.
+
+### `POST /scheduled-emails/preflight`
+Runs payload, future-time, sender-profile, suppression, rendering, message-size, and SMTP connectivity checks.
+
+### `POST /scheduled-emails`
+Repeats preflight and schedules one object or an array. Each object requires `email`, `subject`, `body`, `scheduled_at`, and `profile_id`; `body_mode` defaults to `markdown`.
+
+### `GET /scheduled-emails`
+Lists individual emails and their current delivery status.
+
+### `PUT /scheduled-emails/{email_id}`
+Validates, preflights, and reschedules an email that has not begun sending.
+
+### `POST /scheduled-emails/{email_id}/cancel`
+Cancels an email in `scheduled` or `retry` state.

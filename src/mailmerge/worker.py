@@ -9,8 +9,8 @@ from sqlalchemy import func, select
 
 from .config import settings
 from .db import SessionLocal, init_db
-from .messages import build_message
-from .models import AuditLog, Campaign, CampaignState, DeliveryAttempt, Profile, Recipient, recipient_domain_ordering
+from .messages import build_individual_message, build_message
+from .models import AuditLog, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, ScheduledEmail, ScheduledEmailAttempt, UnsubscribeEvent, recipient_domain_ordering
 from .profile_config import load_profiles
 from .rendering import render_message, templates_for_unsubscribe_setting
 from .secrets import get_secret
@@ -57,44 +57,117 @@ def next_dispatch_start(campaign: Campaign, profile: Profile, now_utc: datetime 
     return candidate.astimezone(timezone.utc)
 
 
-def sent_today(db, profile: Profile, campaign: Campaign, now_utc: datetime | None = None) -> int:
+def _profile_success_timestamps(db, profile: Profile, now_utc: datetime) -> list[datetime]:
+    start = now_utc - timedelta(hours=24)
+    campaign_attempts = db.scalars(
+        select(DeliveryAttempt.attempted_at)
+        .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
+        .join(Campaign, Recipient.campaign_id == Campaign.id)
+        .where(Campaign.profile_id == profile.id, DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at <= now_utc)
+    ).all()
+    individual_attempts = db.scalars(
+        select(ScheduledEmailAttempt.attempted_at)
+        .join(ScheduledEmail, ScheduledEmailAttempt.scheduled_email_id == ScheduledEmail.id)
+        .where(ScheduledEmail.profile_id == profile.id, ScheduledEmailAttempt.outcome == "sent", ScheduledEmailAttempt.attempted_at >= start, ScheduledEmailAttempt.attempted_at <= now_utc)
+    ).all()
+    timestamps = [timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp for timestamp in [*campaign_attempts, *individual_attempts]]
+    return sorted(timestamps)
+
+
+def sent_today(db, profile: Profile, campaign: Campaign | None, now_utc: datetime | None = None) -> int:
     """Successful sends by this profile in the preceding rolling 24 hours.
 
     The historical name is retained for API compatibility; it is intentionally
     not a calendar-day count.
     """
     current = now_utc or datetime.now(timezone.utc)
-    start = current - timedelta(hours=24)
-    return db.scalar(
-        select(func.count()).select_from(DeliveryAttempt)
-        .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
-        .join(Campaign, Recipient.campaign_id == Campaign.id)
-        .where(Campaign.profile_id == profile.id, DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at <= current)
-    ) or 0
+    return len(_profile_success_timestamps(db, profile, current))
 
 
-def next_profile_send_slot(db, profile: Profile, campaign: Campaign, now_utc: datetime | None = None) -> datetime | None:
+def next_profile_send_slot(db, profile: Profile, campaign: Campaign | None, now_utc: datetime | None = None) -> datetime | None:
     """Return when the next rolling-cap slot opens, or None when one is free."""
     current = now_utc or datetime.now(timezone.utc)
-    start = current - timedelta(hours=24)
-    sent_attempts = db.scalars(
-        select(DeliveryAttempt.attempted_at)
-        .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
-        .join(Campaign, Recipient.campaign_id == Campaign.id)
-        .where(
-            Campaign.profile_id == profile.id,
-            DeliveryAttempt.outcome == "sent",
-            DeliveryAttempt.attempted_at >= start,
-            DeliveryAttempt.attempted_at <= current,
-        )
-        .order_by(DeliveryAttempt.attempted_at.asc())
-    ).all()
+    sent_attempts = _profile_success_timestamps(db, profile, current)
     if len(sent_attempts) < profile.daily_cap:
         return None
     oldest = sent_attempts[0]
     if oldest.tzinfo is None:
         oldest = oldest.replace(tzinfo=timezone.utc)
     return oldest + timedelta(hours=24)
+
+
+def _scheduled_email_is_suppressed(db, email: ScheduledEmail) -> bool:
+    markers = (
+        db.scalar(select(UnsubscribeEvent.source_event_id).where(func.lower(UnsubscribeEvent.email) == email.normalized_email).limit(1)),
+        db.scalar(select(ManualSuppressionEvent.id).where(ManualSuppressionEvent.email == email.normalized_email).limit(1)),
+        db.scalar(select(Recipient.id).where(Recipient.normalized_email == email.normalized_email, Recipient.suppressed).limit(1)),
+    )
+    return any(marker is not None for marker in markers)
+
+
+def process_scheduled_email(email_id: str) -> None:
+    with SessionLocal() as db:
+        email = db.get(ScheduledEmail, email_id)
+        if not email or email.status not in {"scheduled", "retry"}:
+            return
+        profile = db.get(Profile, email.profile_id)
+        if not profile:
+            email.status = "failed"
+            email.last_error = "sender profile not found"
+            db.commit()
+            return
+        if _scheduled_email_is_suppressed(db, email):
+            email.status = "suppressed"
+            email.last_error = "recipient is on the suppression list"
+            db.commit()
+            return
+        next_slot = next_profile_send_slot(db, profile, None)
+        if next_slot:
+            email.status = "scheduled"
+            email.scheduled_at = next_slot
+            email.last_error = "delayed by the sender profile rolling 24-hour cap"
+            db.commit()
+            return
+
+        email.status = "sending"
+        email.last_error = None
+        db.commit()
+        try:
+            client = connect(profile, password=get_secret(profile.id, "password"), access_token=get_secret(profile.id, "access_token"))
+        except Exception as exc:
+            kind, code = ("authentication", None) if isinstance(exc, AuthenticationFailure) else classify_smtp_error(exc)
+            attempt_no = (db.scalar(select(func.count()).select_from(ScheduledEmailAttempt).where(ScheduledEmailAttempt.scheduled_email_id == email.id)) or 0) + 1
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=RETRY_DELAYS[attempt_no - 1]) if kind == "transient" and attempt_no <= len(RETRY_DELAYS) else None
+            email.status = "retry" if retry_at else "failed"
+            if retry_at:
+                email.scheduled_at = retry_at
+            email.last_error = str(exc)[:1000]
+            db.add(ScheduledEmailAttempt(scheduled_email_id=email.id, outcome=kind, smtp_code=code, detail=email.last_error, retry_at=retry_at))
+            db.commit()
+            return
+        try:
+            rendered = render_message(email.subject, email.body, email.body_mode, {})
+            message = build_individual_message(profile, email.recipient_email, rendered)
+            send(client, message)
+            email.status = "sent"
+            email.sent_at = datetime.now(timezone.utc)
+            email.message_id = message["Message-ID"]
+            db.add(ScheduledEmailAttempt(scheduled_email_id=email.id, outcome="sent"))
+        except Exception as exc:
+            kind, code = classify_smtp_error(exc)
+            attempt_no = (db.scalar(select(func.count()).select_from(ScheduledEmailAttempt).where(ScheduledEmailAttempt.scheduled_email_id == email.id)) or 0) + 1
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=RETRY_DELAYS[attempt_no - 1]) if kind == "transient" and attempt_no <= len(RETRY_DELAYS) else None
+            email.status = "retry" if retry_at else "failed"
+            if retry_at:
+                email.scheduled_at = retry_at
+            email.last_error = str(exc)[:1000]
+            db.add(ScheduledEmailAttempt(scheduled_email_id=email.id, outcome=kind, smtp_code=code, detail=email.last_error, retry_at=retry_at))
+        finally:
+            try:
+                client.quit()
+            except Exception:
+                pass
+        db.commit()
 
 
 def process_campaign(campaign_id: str) -> None:
@@ -260,6 +333,16 @@ def tick() -> None:
         db.commit()
     for campaign_id in due:
         process_campaign(campaign_id)
+    with SessionLocal() as db:
+        scheduled_emails = db.scalars(
+            select(ScheduledEmail).where(
+                ScheduledEmail.status.in_(["scheduled", "retry"]),
+                ScheduledEmail.scheduled_at <= now,
+            ).order_by(ScheduledEmail.scheduled_at.asc())
+        ).all()
+        individual_due = [email.id for email in scheduled_emails]
+    for email_id in individual_due:
+        process_scheduled_email(email_id)
 
 
 def run() -> None:

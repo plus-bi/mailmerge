@@ -135,6 +135,35 @@ class DeliveryAttempt(Base):
     retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class ScheduledEmail(Base):
+    __tablename__ = "scheduled_emails"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), index=True)
+    recipient_email: Mapped[str] = mapped_column(String(320), index=True)
+    normalized_email: Mapped[str] = mapped_column(String(320), index=True)
+    subject: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    body_mode: Mapped[str] = mapped_column(String(20), default="markdown")
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="scheduled", index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message_id: Mapped[str | None] = mapped_column(String(255))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class ScheduledEmailAttempt(Base):
+    __tablename__ = "scheduled_email_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scheduled_email_id: Mapped[str] = mapped_column(ForeignKey("scheduled_emails.id", ondelete="CASCADE"), index=True)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    outcome: Mapped[str] = mapped_column(String(30))
+    smtp_code: Mapped[int | None] = mapped_column(Integer)
+    detail: Mapped[str | None] = mapped_column(Text)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

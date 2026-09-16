@@ -22,11 +22,11 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import SessionLocal, get_db
 from .json_import import parse_recipients_json
-from .messages import build_message
-from .models import Attachment, AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
+from .messages import build_individual_message, build_message
+from .models import Attachment, AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, ScheduledEmail, SyncCursor, UnsubscribeEvent, recipient_domain_ordering
 from .worker import _dispatch_timezone, _window_minutes, sent_today
 from .profile_config import dump_profiles, load_profiles, load_profiles_text, save_profile_file, validate_profile_entry
-from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, validate_template_variables
+from .rendering import get_required_variables, render_message, templates_for_unsubscribe_setting, valid_email, validate_template_variables
 from .secrets import get_secret, set_secret
 from .smtp import AuthenticationFailure, connect, send
 from .suppression import sync_suppressions
@@ -161,6 +161,64 @@ class CampaignStatusOut(BaseModel):
     scheduled_at: datetime
     counts: dict[str, int]
     total: int
+
+
+class ScheduledEmailIn(BaseModel):
+    email: str
+    subject: str
+    body: str
+    scheduled_at: datetime
+    profile_id: str
+    body_mode: Literal["markdown", "html"] = "markdown"
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        email = value.strip()
+        if not valid_email(email):
+            raise ValueError("enter a valid email address")
+        return email
+
+    @field_validator("subject", "body")
+    @classmethod
+    def require_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value
+
+
+class ScheduledEmailOut(ORMModel):
+    id: str
+    profile_id: str
+    recipient_email: str = Field(serialization_alias="email")
+    subject: str
+    body: str
+    body_mode: str
+    scheduled_at: datetime
+    status: str
+    sent_at: datetime | None
+    message_id: str | None
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ScheduledEmailPreviewOut(BaseModel):
+    email: str
+    profile_id: str
+    profile: str
+    scheduled_at: datetime
+    subject: str
+    html: str
+    text: str
+    headers: dict[str, str]
+    size_bytes: int
+
+
+class ScheduledEmailPreflightOut(BaseModel):
+    ok: bool
+    previews: list[ScheduledEmailPreviewOut]
+    message: str
 
 
 class UnsubscribeEventOut(ORMModel):
@@ -416,6 +474,170 @@ def reload_profile_config(db: Session = Depends(get_db)):
         return load_profiles(settings.profile_config_path, db)
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+def _validate_scheduled_email(data: ScheduledEmailIn, db: Session) -> tuple[Profile, datetime]:
+    profile = db.get(Profile, data.profile_id)
+    if not profile:
+        raise HTTPException(422, f"sender profile {data.profile_id!r} was not found")
+    if not (profile.from_address or "").strip():
+        raise HTTPException(422, f"sender profile {profile.name!r} has no sender email address")
+    if data.scheduled_at.tzinfo is None:
+        raise HTTPException(422, "scheduled_at must include a timezone offset")
+    scheduled_at = data.scheduled_at.astimezone(timezone.utc)
+    if scheduled_at <= datetime.now(timezone.utc):
+        raise HTTPException(422, "scheduled_at must be in the future")
+    normalized = data.email.casefold()
+    suppression_markers = (
+        db.scalar(select(UnsubscribeEvent.source_event_id).where(func.lower(UnsubscribeEvent.email) == normalized).limit(1)),
+        db.scalar(select(ManualSuppressionEvent.id).where(ManualSuppressionEvent.email == normalized).limit(1)),
+        db.scalar(select(Recipient.id).where(Recipient.normalized_email == normalized, Recipient.suppressed).limit(1)),
+    )
+    if any(marker is not None for marker in suppression_markers):
+        raise HTTPException(409, f"{data.email} is on the suppression list")
+    return profile, scheduled_at
+
+
+def _scheduled_email_preview(data: ScheduledEmailIn, db: Session) -> tuple[dict[str, Any], Profile]:
+    profile, scheduled_at = _validate_scheduled_email(data, db)
+    try:
+        rendered = render_message(data.subject, data.body, data.body_mode, {})
+        message = build_individual_message(profile, data.email, rendered)
+    except Exception as exc:
+        raise HTTPException(422, f"failed to render email for {data.email}: {exc}") from exc
+    size_bytes = len(message.as_bytes())
+    if size_bytes > profile.max_message_bytes:
+        raise HTTPException(422, f"email for {data.email} is {size_bytes} bytes; profile limit is {profile.max_message_bytes}")
+    return {
+        "email": data.email,
+        "profile_id": profile.id,
+        "profile": profile.name,
+        "scheduled_at": scheduled_at,
+        "subject": rendered.subject,
+        "html": rendered.html,
+        "text": rendered.text,
+        "headers": {key: str(value) for key, value in message.items()},
+        "size_bytes": size_bytes,
+    }, profile
+
+
+def _preflight_scheduled_email_payloads(payloads: list[ScheduledEmailIn], db: Session, *, test_smtp: bool) -> list[dict[str, Any]]:
+    previews: list[dict[str, Any]] = []
+    profiles: dict[str, Profile] = {}
+    for payload in payloads:
+        preview, profile = _scheduled_email_preview(payload, db)
+        previews.append(preview)
+        profiles[profile.id] = profile
+    if test_smtp:
+        for profile in profiles.values():
+            try:
+                client = connect(profile, password=get_secret(profile.id, "password"), access_token=get_secret(profile.id, "access_token"))
+                try:
+                    code, _ = client.noop()
+                    if code >= 400:
+                        raise smtplib.SMTPResponseException(code, b"NOOP rejected")
+                finally:
+                    try:
+                        client.quit()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                raise HTTPException(502, f"sender profile {profile.name!r} failed SMTP preflight: {exc}") from exc
+    return previews
+
+
+@router.get("/scheduled-emails", response_model=list[ScheduledEmailOut])
+def list_scheduled_emails(db: Session = Depends(get_db)):
+    return db.scalars(select(ScheduledEmail).order_by(ScheduledEmail.scheduled_at.desc())).all()
+
+
+@router.post("/scheduled-emails/preview", response_model=ScheduledEmailPreflightOut)
+def preview_scheduled_emails(data: ScheduledEmailIn | list[ScheduledEmailIn], db: Session = Depends(get_db)):
+    payloads = data if isinstance(data, list) else [data]
+    if not payloads:
+        raise HTTPException(422, "provide at least one scheduled email")
+    previews = _preflight_scheduled_email_payloads(payloads, db, test_smtp=False)
+    return {"ok": True, "previews": previews, "message": f"Validated and rendered {len(previews)} email(s)."}
+
+
+@router.post("/scheduled-emails/preflight", response_model=ScheduledEmailPreflightOut)
+def preflight_scheduled_emails(data: ScheduledEmailIn | list[ScheduledEmailIn], db: Session = Depends(get_db)):
+    payloads = data if isinstance(data, list) else [data]
+    if not payloads:
+        raise HTTPException(422, "provide at least one scheduled email")
+    previews = _preflight_scheduled_email_payloads(payloads, db, test_smtp=True)
+    return {"ok": True, "previews": previews, "message": f"Validated {len(previews)} email(s) and confirmed SMTP connectivity."}
+
+
+@router.post("/scheduled-emails", response_model=list[ScheduledEmailOut])
+def create_scheduled_emails(data: ScheduledEmailIn | list[ScheduledEmailIn], db: Session = Depends(get_db)):
+    payloads = data if isinstance(data, list) else [data]
+    if not payloads:
+        raise HTTPException(422, "provide at least one scheduled email")
+    _preflight_scheduled_email_payloads(payloads, db, test_smtp=True)
+    emails: list[ScheduledEmail] = []
+    for payload in payloads:
+        _, scheduled_at = _validate_scheduled_email(payload, db)
+        email = ScheduledEmail(
+            profile_id=payload.profile_id,
+            recipient_email=payload.email,
+            normalized_email=payload.email.casefold(),
+            subject=payload.subject,
+            body=payload.body,
+            body_mode=payload.body_mode,
+            scheduled_at=scheduled_at,
+            status="scheduled",
+        )
+        db.add(email)
+        emails.append(email)
+    db.commit()
+    return emails
+
+
+@router.put("/scheduled-emails/{email_id}", response_model=ScheduledEmailOut)
+def update_scheduled_email(email_id: str, data: ScheduledEmailIn, db: Session = Depends(get_db)):
+    email = db.get(ScheduledEmail, email_id)
+    if not email:
+        raise HTTPException(404, "scheduled email not found")
+    if email.status in {"sending", "sent"}:
+        raise HTTPException(409, f"a {email.status} email cannot be edited")
+    _preflight_scheduled_email_payloads([data], db, test_smtp=True)
+    _, scheduled_at = _validate_scheduled_email(data, db)
+    email.profile_id = data.profile_id
+    email.recipient_email = data.email
+    email.normalized_email = data.email.casefold()
+    email.subject = data.subject
+    email.body = data.body
+    email.body_mode = data.body_mode
+    email.scheduled_at = scheduled_at
+    email.status = "scheduled"
+    email.last_error = None
+    db.commit()
+    return email
+
+
+@router.post("/scheduled-emails/{email_id}/cancel", response_model=ScheduledEmailOut)
+def cancel_scheduled_email(email_id: str, db: Session = Depends(get_db)):
+    email = db.get(ScheduledEmail, email_id)
+    if not email:
+        raise HTTPException(404, "scheduled email not found")
+    if email.status not in {"scheduled", "retry"}:
+        raise HTTPException(409, f"a {email.status} email cannot be cancelled")
+    email.status = "cancelled"
+    db.commit()
+    return email
+
+
+@router.delete("/scheduled-emails/{email_id}")
+def delete_scheduled_email(email_id: str, db: Session = Depends(get_db)):
+    email = db.get(ScheduledEmail, email_id)
+    if not email:
+        raise HTTPException(404, "scheduled email not found")
+    if email.status == "sending":
+        raise HTTPException(409, "a sending email cannot be deleted")
+    db.delete(email)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/campaigns", response_model=list[CampaignOut])

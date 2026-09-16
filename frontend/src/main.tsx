@@ -189,6 +189,32 @@ type SuppressionReview = {
   synced_unsubscribes: number;
 };
 
+type ScheduledEmail = {
+  id: string;
+  profile_id: string;
+  email: string;
+  subject: string;
+  body: string;
+  body_mode: 'markdown' | 'html';
+  scheduled_at: string;
+  status: string;
+  sent_at: string | null;
+  message_id: string | null;
+  last_error: string | null;
+};
+
+type ScheduledEmailPreview = {
+  email: string;
+  profile_id: string;
+  profile: string;
+  scheduled_at: string;
+  subject: string;
+  html: string;
+  text: string;
+  headers: Record<string, string>;
+  size_bytes: number;
+};
+
 const localDateTimeValue = (date: Date) => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
@@ -300,6 +326,14 @@ function Dashboard() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileTesting, setProfileTesting] = useState(false);
   const profileFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [individualEmailOpen, setIndividualEmailOpen] = useState(false);
+  const [scheduledEmails, setScheduledEmails] = useState<ScheduledEmail[]>([]);
+  const [individualJson, setIndividualJson] = useState('');
+  const [individualPreviews, setIndividualPreviews] = useState<ScheduledEmailPreview[]>([]);
+  const [individualPreflightPassed, setIndividualPreflightPassed] = useState(false);
+  const [individualBusy, setIndividualBusy] = useState(false);
+  const [editingIndividualId, setEditingIndividualId] = useState<string | null>(null);
+  const [selectedIndividualPreview, setSelectedIndividualPreview] = useState(0);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -360,6 +394,123 @@ function Dashboard() {
       setProfiles(data);
     } catch (e: any) {
       notify(e.message, true);
+    }
+  };
+
+  const loadScheduledEmails = async () => {
+    try {
+      const data: ScheduledEmail[] = await api('/scheduled-emails');
+      setScheduledEmails(data);
+    } catch (e: any) {
+      notify(e.message, true);
+    }
+  };
+
+  const newIndividualPayload = () => {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    tomorrow.setUTCSeconds(0, 0);
+    return JSON.stringify({
+      email: '',
+      subject: '',
+      body: '',
+      scheduled_at: tomorrow.toISOString(),
+      profile_id: profiles[0]?.id || '',
+      body_mode: 'markdown',
+    }, null, 2);
+  };
+
+  const setIndividualPayload = (value: string) => {
+    setIndividualJson(value);
+    setIndividualPreviews([]);
+    setIndividualPreflightPassed(false);
+    setSelectedIndividualPreview(0);
+  };
+
+  const openIndividualEmails = () => {
+    setEditingIndividualId(null);
+    setIndividualPayload(newIndividualPayload());
+    setIndividualEmailOpen(true);
+    void loadScheduledEmails();
+  };
+
+  const parseIndividualPayload = () => {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(individualJson);
+    } catch (e: any) {
+      throw new Error(`Invalid JSON: ${e.message}`);
+    }
+    if (!payload || (typeof payload !== 'object')) throw new Error('Payload must be a JSON object or array.');
+    if (Array.isArray(payload) && payload.length === 0) throw new Error('Payload array must contain at least one email.');
+    return payload;
+  };
+
+  const editIndividualEmail = (email: ScheduledEmail) => {
+    setEditingIndividualId(email.id);
+    setIndividualPayload(JSON.stringify({
+      email: email.email,
+      subject: email.subject,
+      body: email.body,
+      scheduled_at: email.scheduled_at,
+      profile_id: email.profile_id,
+      body_mode: email.body_mode,
+    }, null, 2));
+  };
+
+  const previewIndividualEmails = async (preflight = false) => {
+    setIndividualBusy(true);
+    try {
+      const payload = parseIndividualPayload();
+      if (editingIndividualId && Array.isArray(payload)) throw new Error('Editing one scheduled email requires one JSON object.');
+      const result = await api(`/scheduled-emails/${preflight ? 'preflight' : 'preview'}`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setIndividualPreviews(result.previews);
+      setSelectedIndividualPreview(0);
+      setIndividualPreflightPassed(preflight);
+      notify(result.message);
+    } catch (e: any) {
+      setIndividualPreflightPassed(false);
+      notify(e.message, true);
+    } finally {
+      setIndividualBusy(false);
+    }
+  };
+
+  const scheduleIndividualEmails = async () => {
+    if (!individualPreflightPassed) return;
+    setIndividualBusy(true);
+    try {
+      const payload = parseIndividualPayload();
+      const result: ScheduledEmail[] | ScheduledEmail = await api(
+        editingIndividualId ? `/scheduled-emails/${editingIndividualId}` : '/scheduled-emails',
+        { method: editingIndividualId ? 'PUT' : 'POST', body: JSON.stringify(payload) },
+      );
+      const saved = Array.isArray(result) ? result : [result];
+      const times = saved.map((email) => new Date(email.scheduled_at).toLocaleString()).join(', ');
+      notify(`${saved.length} individual email${saved.length === 1 ? '' : 's'} confirmed and scheduled for ${times}.`);
+      await loadScheduledEmails();
+      setEditingIndividualId(null);
+      setIndividualPayload(newIndividualPayload());
+    } catch (e: any) {
+      setIndividualPreflightPassed(false);
+      notify(e.message, true);
+    } finally {
+      setIndividualBusy(false);
+    }
+  };
+
+  const cancelIndividualEmail = async (email: ScheduledEmail) => {
+    setIndividualBusy(true);
+    try {
+      await api(`/scheduled-emails/${email.id}/cancel`, { method: 'POST' });
+      notify(`Cancelled the email to ${email.email}.`);
+      await loadScheduledEmails();
+    } catch (e: any) {
+      notify(e.message, true);
+    } finally {
+      setIndividualBusy(false);
     }
   };
 
@@ -538,6 +689,12 @@ function Dashboard() {
   useEffect(() => {
     if (activeTab === 'unsubscribed') void loadSuppressions();
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!individualEmailOpen) return;
+    const timer = window.setInterval(() => void loadScheduledEmails(), 5000);
+    return () => window.clearInterval(timer);
+  }, [individualEmailOpen]);
 
   const setupSSE = (campaignId: string) => {
     if (eventSourceRef.current) {
@@ -964,6 +1121,7 @@ function Dashboard() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <button onClick={handleCreateCampaign}>+ New Campaign</button>
+          <button className="secondary" onClick={openIndividualEmails}>Individual emails</button>
           <button className="secondary" onClick={openNewProfile}>Profiles</button>
           <UserButton />
         </div>
@@ -1186,6 +1344,132 @@ function Dashboard() {
                   <button type="submit" disabled={profileBusy || profileTesting}>{profileBusy ? 'Saving…' : 'Save profile'}</button>
                 </div>
               </form>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {individualEmailOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setIndividualEmailOpen(false)}>
+          <section
+            className="profile-modal individual-email-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="individual-email-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="profile-modal-header">
+              <div>
+                <h2 id="individual-email-title">Scheduled individual emails</h2>
+                <p>Validate, preview, preflight, and schedule standalone JSON email jobs.</p>
+              </div>
+              <button className="icon-button secondary" aria-label="Close individual emails" onClick={() => setIndividualEmailOpen(false)}>✕</button>
+            </div>
+            <div className="individual-email-layout">
+              <nav className="profile-list individual-email-list" aria-label="Scheduled individual emails">
+                <button
+                  className={`profile-list-item ${editingIndividualId === null ? 'active' : ''}`}
+                  onClick={() => {
+                    setEditingIndividualId(null);
+                    setIndividualPayload(newIndividualPayload());
+                  }}
+                >
+                  <strong>＋ New JSON payload</strong>
+                  <span>One object or an array</span>
+                </button>
+                {scheduledEmails.map((email) => (
+                  <button
+                    key={email.id}
+                    className={`profile-list-item ${editingIndividualId === email.id ? 'active' : ''}`}
+                    onClick={() => editIndividualEmail(email)}
+                  >
+                    <strong>{email.email}</strong>
+                    <span>{new Date(email.scheduled_at).toLocaleString()}</span>
+                    <span className={`badge badge-${email.status}`}>{email.status}</span>
+                  </button>
+                ))}
+                {scheduledEmails.length === 0 && <p className="empty-list-note">No individual emails scheduled.</p>}
+              </nav>
+
+              <div className="individual-email-workspace">
+                <section className="individual-email-editor">
+                  <div className="individual-section-heading">
+                    <div>
+                      <h3>{editingIndividualId ? 'Email JSON' : 'New email JSON'}</h3>
+                      <p>Dates must be ISO 8601 with a timezone offset. Arrays create independent jobs.</p>
+                    </div>
+                  </div>
+                  <textarea
+                    className="code individual-json-editor"
+                    value={individualJson}
+                    onChange={(event) => setIndividualPayload(event.target.value)}
+                    spellCheck={false}
+                    disabled={Boolean(editingIndividualId && ['sending', 'sent'].includes(scheduledEmails.find((email) => email.id === editingIndividualId)?.status || ''))}
+                  />
+                  <details className="profile-reference">
+                    <summary>Available sender profiles</summary>
+                    {profiles.map((profile) => (
+                      <div key={profile.id}><strong>{profile.name}</strong> <code>{profile.id}</code></div>
+                    ))}
+                  </details>
+                  <div className="individual-actions">
+                    {editingIndividualId && ['scheduled', 'retry'].includes(scheduledEmails.find((email) => email.id === editingIndividualId)?.status || '') && (
+                      <button className="danger" onClick={() => {
+                        const email = scheduledEmails.find((item) => item.id === editingIndividualId);
+                        if (email) void cancelIndividualEmail(email);
+                      }} disabled={individualBusy}>Cancel email</button>
+                    )}
+                    <button className="secondary" onClick={() => void previewIndividualEmails(false)} disabled={individualBusy}>Live preview</button>
+                    <button className="secondary" onClick={() => void previewIndividualEmails(true)} disabled={individualBusy}>
+                      {individualBusy ? 'Checking…' : 'Run preflight'}
+                    </button>
+                    <button
+                      onClick={() => void scheduleIndividualEmails()}
+                      disabled={individualBusy || !individualPreflightPassed || Boolean(editingIndividualId && ['sending', 'sent'].includes(scheduledEmails.find((email) => email.id === editingIndividualId)?.status || ''))}
+                    >
+                      {editingIndividualId ? 'Save & reschedule' : 'Confirm schedule'}
+                    </button>
+                  </div>
+                  <p className={`preflight-state ${individualPreflightPassed ? 'passed' : ''}`}>
+                    {individualPreflightPassed ? '✓ Payload, rendering, message size, suppression, and SMTP connectivity passed.' : 'Run preflight after every JSON change before scheduling.'}
+                  </p>
+                </section>
+
+                <section className="individual-preview-panel">
+                  <div className="individual-section-heading">
+                    <div>
+                      <h3>Rendered preview</h3>
+                      <p>{individualPreviews.length ? `${individualPreviews.length} validated email(s)` : 'Validate the JSON to see the rendered message.'}</p>
+                    </div>
+                    {individualPreviews.length > 1 && (
+                      <select value={selectedIndividualPreview} onChange={(event) => setSelectedIndividualPreview(Number(event.target.value))}>
+                        {individualPreviews.map((preview, index) => <option key={`${preview.email}-${index}`} value={index}>{preview.email}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  {individualPreviews[selectedIndividualPreview] ? (
+                    <>
+                      <dl className="individual-preview-meta">
+                        <div><dt>To</dt><dd>{individualPreviews[selectedIndividualPreview].email}</dd></div>
+                        <div><dt>Subject</dt><dd>{individualPreviews[selectedIndividualPreview].subject}</dd></div>
+                        <div><dt>Profile</dt><dd>{individualPreviews[selectedIndividualPreview].profile}</dd></div>
+                        <div><dt>Send time</dt><dd>{new Date(individualPreviews[selectedIndividualPreview].scheduled_at).toLocaleString()}</dd></div>
+                      </dl>
+                      <iframe
+                        className="individual-preview-frame"
+                        title="Rendered individual email"
+                        sandbox=""
+                        srcDoc={individualPreviews[selectedIndividualPreview].html}
+                      />
+                      <details className="profile-reference">
+                        <summary>Plain text and generated headers</summary>
+                        <pre>{individualPreviews[selectedIndividualPreview].text}</pre>
+                        <pre>{Object.entries(individualPreviews[selectedIndividualPreview].headers).map(([key, value]) => `${key}: ${value}`).join('\n')}</pre>
+                      </details>
+                    </>
+                  ) : <div className="individual-preview-empty">No preview yet.</div>}
+                </section>
+              </div>
             </div>
           </section>
         </div>

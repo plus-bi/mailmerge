@@ -51,3 +51,21 @@ def build_message(campaign: Campaign, recipient_email: str, rendered: RenderedMe
         maintype, subtype = (attachment.content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream").split("/", 1)
         message.add_attachment(path.read_bytes(), maintype=maintype, subtype=subtype, filename=attachment.filename)
     return message
+
+
+def build_individual_message(profile: Profile, recipient_email: str, rendered: RenderedMessage) -> EmailMessage:
+    message = EmailMessage()
+    from_name = profile.from_name or ""
+    from_address = profile.from_address or ""
+    reply_to = profile.reply_to
+    reply_to_address = parseaddr(reply_to or "")[1]
+    domain = reply_to_address.split("@")[-1] if "@" in reply_to_address else (from_address.split("@")[-1] if "@" in from_address else None)
+    message["Message-ID"] = make_msgid(domain=domain)
+    message["From"] = formataddr((from_name, from_address))
+    message["To"] = recipient_email
+    message["Subject"] = rendered.subject
+    if reply_to:
+        message["Reply-To"] = reply_to
+    message.set_content(rendered.text)
+    message.add_alternative(rendered.html, subtype="html")
+    return message
