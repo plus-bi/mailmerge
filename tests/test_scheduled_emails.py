@@ -127,21 +127,24 @@ def test_worker_sends_due_individual_email(test_db_session, monkeypatch):
     assert test_db_session.query(ScheduledEmailAttempt).filter_by(scheduled_email_id=email.id, outcome="sent").count() == 1
 
 
-def test_individual_sends_count_toward_profile_rolling_cap(test_db_session):
+def test_individual_failed_sends_count_toward_profile_rolling_cap_but_authentication_does_not(test_db_session):
     profile = _profile(test_db_session, daily_cap=1)
     email = ScheduledEmail(
         profile_id=profile.id,
         recipient_email="person@example.com",
         normalized_email="person@example.com",
-        subject="Sent",
-        body="Sent",
+        subject="Attempted",
+        body="Attempted",
         scheduled_at=datetime.now(timezone.utc),
-        status="sent",
+        status="failed",
     )
     test_db_session.add(email)
     test_db_session.flush()
     now = datetime.now(timezone.utc)
-    test_db_session.add(ScheduledEmailAttempt(scheduled_email_id=email.id, outcome="sent", attempted_at=now - timedelta(hours=23)))
+    test_db_session.add_all([
+        ScheduledEmailAttempt(scheduled_email_id=email.id, outcome="permanent", smtp_code=550, attempted_at=now - timedelta(hours=23)),
+        ScheduledEmailAttempt(scheduled_email_id=email.id, outcome="authentication", attempted_at=now - timedelta(hours=23, minutes=30)),
+    ])
     test_db_session.commit()
 
     assert worker.sent_today(test_db_session, profile, None, now) == 1

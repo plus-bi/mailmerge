@@ -988,9 +988,15 @@ def preflight(campaign: Campaign, db: Session) -> dict:
         within_window = start_minutes <= current_minutes < end_minutes
         window_seconds = int((window_end - local_now).total_seconds()) if within_window else max(0, end_minutes - start_minutes) * 60
         window_capacity = profile.daily_cap if delay == 0 else (window_seconds + delay - 1) // delay
-        sent = sent_today(db, profile, campaign)
-        today_target = min(len(previews), max(0, profile.daily_cap - sent))
-        capacity = {"rolling_24h_limit": profile.daily_cap, "already_sent_last_24h": sent, "today_target": today_target, "window_capacity": window_capacity}
+        attempts = sent_today(db, profile, campaign)
+        today_target = min(len(previews), max(0, profile.daily_cap - attempts))
+        capacity = {
+            "rolling_24h_limit": profile.daily_cap,
+            "attempted_last_24h": attempts,
+            "already_sent_last_24h": attempts,
+            "today_target": today_target,
+            "window_capacity": window_capacity,
+        }
         if start_minutes >= end_minutes:
             errors.append("dispatch window end time must be after its start time")
         elif window_capacity < today_target:

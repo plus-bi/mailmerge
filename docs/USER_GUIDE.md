@@ -230,7 +230,7 @@ Use **Individual emails** in the header for one-off messages that should not bec
 3. Click **Confirm schedule**. The app displays the confirmed local send time.
 4. Select a saved email to preview, edit/reschedule, or cancel it before sending begins.
 
-`email`, `subject`, `body`, `scheduled_at`, and `profile_id` are required. `scheduled_at` must be a future ISO 8601 timestamp with a timezone offset. `body_mode` is optional and defaults to `markdown`. Individual sends count toward the selected profile's rolling 24-hour cap; if the cap is full at send time, the worker moves the job to the next available slot.
+`email`, `subject`, `body`, `scheduled_at`, and `profile_id` are required. `scheduled_at` must be a future ISO 8601 timestamp with a timezone offset. `body_mode` is optional and defaults to `markdown`. Every SMTP delivery attempt, including transient and permanent failures, counts toward the selected profile's rolling 24-hour cap. Connection or authentication failures before a message is submitted do not count. If the cap is full at send time, the worker moves the job to the next available slot.
 
 ---
 
@@ -241,8 +241,8 @@ Use **Individual emails** in the header for one-off messages that should not bec
 - **Fix**: Update the recipient's JSON data or adjust your template to provide a default fallback: `{{ title | default('Team Member') }}`.
 
 ### 2. "Rolling daily cap exceeded"
-- **Cause**: The number of scheduled emails plus emails sent in the last 24 hours exceeds the profile's `daily_cap`.
-- **Fix**: Either schedule the remaining emails for tomorrow or approve the guardrail override prompt.
+- **Cause**: SMTP delivery attempts in the last 24 hours, including failed attempts and retries, have exhausted the profile's `daily_cap`.
+- **Fix**: The worker automatically defers remaining messages until the oldest counted attempt leaves the rolling 24-hour window.
 
 ### 3. "Authentication failed"
 - **Cause**: SMTP credentials stored in keyring or environment were rejected by the remote mail server.

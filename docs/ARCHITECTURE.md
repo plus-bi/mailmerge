@@ -132,7 +132,8 @@ The worker (`mailmerge.worker.run`) executes in a dedicated process:
    - For each due campaign, calls `process_campaign(campaign_id)`.
 
 2. **Campaign Processing (`worker.process_campaign()`)**:
-   - Checks the daily **Dispatch Window**. If outside it, or the profile's daily cap is reached, reschedules the remaining recipients for the next day's start time.
+   - Checks the daily **Dispatch Window**. If outside it, or the profile's rolling 24-hour attempt cap is reached, reschedules the remaining recipients for the next available slot.
+   - Counts successful, transient-failure, and permanent-failure SMTP message submissions across campaigns and individual emails. Connection/authentication failures before submission do not consume the cap.
    - Connects to SMTP and authenticates using stored credentials from Keyring.
    - Iterates through sendable recipients (`included`, `valid`, `~suppressed`, `status IN ('pending', 'retry')`).
    - Renders message with Jinja2 sandbox and builds MIME payload.

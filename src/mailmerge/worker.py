@@ -57,40 +57,46 @@ def next_dispatch_start(campaign: Campaign, profile: Profile, now_utc: datetime 
     return candidate.astimezone(timezone.utc)
 
 
-def _profile_success_timestamps(db, profile: Profile, now_utc: datetime) -> list[datetime]:
+def _profile_attempt_timestamps(db, profile: Profile, now_utc: datetime) -> list[datetime]:
     start = now_utc - timedelta(hours=24)
     campaign_attempts = db.scalars(
         select(DeliveryAttempt.attempted_at)
         .join(Recipient, DeliveryAttempt.recipient_id == Recipient.id)
         .join(Campaign, Recipient.campaign_id == Campaign.id)
-        .where(Campaign.profile_id == profile.id, DeliveryAttempt.outcome == "sent", DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at <= now_utc)
+        .where(Campaign.profile_id == profile.id, DeliveryAttempt.attempted_at >= start, DeliveryAttempt.attempted_at <= now_utc)
     ).all()
     individual_attempts = db.scalars(
         select(ScheduledEmailAttempt.attempted_at)
         .join(ScheduledEmail, ScheduledEmailAttempt.scheduled_email_id == ScheduledEmail.id)
-        .where(ScheduledEmail.profile_id == profile.id, ScheduledEmailAttempt.outcome == "sent", ScheduledEmailAttempt.attempted_at >= start, ScheduledEmailAttempt.attempted_at <= now_utc)
+        .where(
+            ScheduledEmail.profile_id == profile.id,
+            ScheduledEmailAttempt.outcome != "authentication",
+            ScheduledEmailAttempt.attempted_at >= start,
+            ScheduledEmailAttempt.attempted_at <= now_utc,
+        )
     ).all()
     timestamps = [timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp for timestamp in [*campaign_attempts, *individual_attempts]]
     return sorted(timestamps)
 
 
 def sent_today(db, profile: Profile, campaign: Campaign | None, now_utc: datetime | None = None) -> int:
-    """Successful sends by this profile in the preceding rolling 24 hours.
+    """SMTP message attempts by this profile in the preceding rolling 24 hours.
 
     The historical name is retained for API compatibility; it is intentionally
-    not a calendar-day count.
+    not a calendar-day count. Failed and retried message submissions consume
+    capacity; connection/authentication failures before submission do not.
     """
     current = now_utc or datetime.now(timezone.utc)
-    return len(_profile_success_timestamps(db, profile, current))
+    return len(_profile_attempt_timestamps(db, profile, current))
 
 
 def next_profile_send_slot(db, profile: Profile, campaign: Campaign | None, now_utc: datetime | None = None) -> datetime | None:
     """Return when the next rolling-cap slot opens, or None when one is free."""
     current = now_utc or datetime.now(timezone.utc)
-    sent_attempts = _profile_success_timestamps(db, profile, current)
-    if len(sent_attempts) < profile.daily_cap:
+    attempts = _profile_attempt_timestamps(db, profile, current)
+    if len(attempts) < profile.daily_cap:
         return None
-    oldest = sent_attempts[0]
+    oldest = attempts[0]
     if oldest.tzinfo is None:
         oldest = oldest.replace(tzinfo=timezone.utc)
     return oldest + timedelta(hours=24)

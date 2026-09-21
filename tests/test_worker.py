@@ -130,7 +130,7 @@ def test_profile_daily_cap_uses_a_rolling_24_hour_window(test_db_session):
     now = datetime(2026, 9, 15, 20, 30, tzinfo=timezone.utc)
     test_db_session.add_all([
         DeliveryAttempt(recipient_id=first.id, outcome="sent", attempted_at=now - timedelta(hours=23, minutes=50)),
-        DeliveryAttempt(recipient_id=second.id, outcome="sent", attempted_at=now - timedelta(hours=23, minutes=40)),
+        DeliveryAttempt(recipient_id=second.id, outcome="permanent", smtp_code=550, attempted_at=now - timedelta(hours=23, minutes=40)),
     ])
     test_db_session.commit()
 
