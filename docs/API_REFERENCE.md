@@ -304,6 +304,8 @@ Runs payload, future-time, sender-profile, suppression, rendering, message-size,
 ### `POST /scheduled-emails`
 Repeats preflight and schedules one object or an array. Each object requires `email`, `subject`, `body`, `scheduled_at`, and `profile_id`; `body_mode` defaults to `markdown`.
 
+The browser JSON editor can import a single object or array, fills missing `profile_id` values from its selected default profile, and converts offset-free local timestamps to UTC before calling the API. Direct API clients must continue to send a resolved `profile_id` and timezone-aware `scheduled_at`.
+
 ### `GET /scheduled-emails`
 Lists individual emails and their current delivery status.
 

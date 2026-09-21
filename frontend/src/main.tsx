@@ -334,6 +334,9 @@ function Dashboard() {
   const [individualBusy, setIndividualBusy] = useState(false);
   const [editingIndividualId, setEditingIndividualId] = useState<string | null>(null);
   const [selectedIndividualPreview, setSelectedIndividualPreview] = useState(0);
+  const [defaultIndividualProfileId, setDefaultIndividualProfileId] = useState('');
+  const [individualImportedFileName, setIndividualImportedFileName] = useState<string | null>(null);
+  const individualFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -408,13 +411,12 @@ function Dashboard() {
 
   const newIndividualPayload = () => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    tomorrow.setUTCSeconds(0, 0);
+    tomorrow.setSeconds(0, 0);
     return JSON.stringify({
       email: '',
       subject: '',
       body: '',
-      scheduled_at: tomorrow.toISOString(),
-      profile_id: profiles[0]?.id || '',
+      scheduled_at: localDateTimeValue(tomorrow),
       body_mode: 'markdown',
     }, null, 2);
   };
@@ -428,6 +430,8 @@ function Dashboard() {
 
   const openIndividualEmails = () => {
     setEditingIndividualId(null);
+    setDefaultIndividualProfileId((current) => current || profiles[0]?.id || '');
+    setIndividualImportedFileName(null);
     setIndividualPayload(newIndividualPayload());
     setIndividualEmailOpen(true);
     void loadScheduledEmails();
@@ -445,13 +449,66 @@ function Dashboard() {
     return payload;
   };
 
+  const prepareIndividualPayload = () => {
+    const payload = parseIndividualPayload();
+    const isArray = Array.isArray(payload);
+    const entries = isArray ? payload : [payload];
+    const normalized = entries.map((rawEntry, index) => {
+      if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+        throw new Error(`Entry ${index + 1} must be a JSON object.`);
+      }
+      const entry = { ...(rawEntry as Record<string, unknown>) };
+      if (!String(entry.profile_id || '').trim()) {
+        if (!defaultIndividualProfileId) {
+          throw new Error(`Entry ${index + 1} has no profile_id. Select a default sender profile.`);
+        }
+        entry.profile_id = defaultIndividualProfileId;
+      }
+      if (typeof entry.scheduled_at !== 'string' || !entry.scheduled_at.trim()) {
+        throw new Error(`Entry ${index + 1} must have a scheduled_at date and time.`);
+      }
+      const scheduledAt = entry.scheduled_at.trim();
+      const hasTimezone = /(Z|[+-]\d{2}:?\d{2})$/i.test(scheduledAt);
+      if (!hasTimezone) {
+        const localDate = new Date(scheduledAt.replace(' ', 'T'));
+        if (Number.isNaN(localDate.getTime())) {
+          throw new Error(`Entry ${index + 1} has an invalid local scheduled_at value.`);
+        }
+        entry.scheduled_at = localDate.toISOString();
+      }
+      return entry;
+    });
+    return isArray ? normalized : normalized[0];
+  };
+
+  const importIndividualJsonFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const content = await file.text();
+      const parsed = JSON.parse(content);
+      if (!parsed || typeof parsed !== 'object' || (Array.isArray(parsed) && parsed.length === 0)) {
+        throw new Error('The file must contain one JSON object or a non-empty array of objects.');
+      }
+      setEditingIndividualId(null);
+      setIndividualPayload(JSON.stringify(parsed, null, 2));
+      setIndividualImportedFileName(file.name);
+      notify(`Imported ${Array.isArray(parsed) ? parsed.length : 1} individual email entr${Array.isArray(parsed) && parsed.length !== 1 ? 'ies' : 'y'} from ${file.name}.`);
+    } catch (e: any) {
+      notify(`Could not import JSON file: ${e.message}`, true);
+    } finally {
+      event.target.value = '';
+    }
+  };
+
   const editIndividualEmail = (email: ScheduledEmail) => {
     setEditingIndividualId(email.id);
+    setIndividualImportedFileName(null);
     setIndividualPayload(JSON.stringify({
       email: email.email,
       subject: email.subject,
       body: email.body,
-      scheduled_at: email.scheduled_at,
+      scheduled_at: localDateTimeValue(new Date(email.scheduled_at)),
       profile_id: email.profile_id,
       body_mode: email.body_mode,
     }, null, 2));
@@ -460,7 +517,7 @@ function Dashboard() {
   const previewIndividualEmails = async (preflight = false) => {
     setIndividualBusy(true);
     try {
-      const payload = parseIndividualPayload();
+      const payload = prepareIndividualPayload();
       if (editingIndividualId && Array.isArray(payload)) throw new Error('Editing one scheduled email requires one JSON object.');
       const result = await api(`/scheduled-emails/${preflight ? 'preflight' : 'preview'}`, {
         method: 'POST',
@@ -482,7 +539,7 @@ function Dashboard() {
     if (!individualPreflightPassed) return;
     setIndividualBusy(true);
     try {
-      const payload = parseIndividualPayload();
+      const payload = prepareIndividualPayload();
       const result: ScheduledEmail[] | ScheduledEmail = await api(
         editingIndividualId ? `/scheduled-emails/${editingIndividualId}` : '/scheduled-emails',
         { method: editingIndividualId ? 'PUT' : 'POST', body: JSON.stringify(payload) },
@@ -492,6 +549,7 @@ function Dashboard() {
       notify(`${saved.length} individual email${saved.length === 1 ? '' : 's'} confirmed and scheduled for ${times}.`);
       await loadScheduledEmails();
       setEditingIndividualId(null);
+      setIndividualImportedFileName(null);
       setIndividualPayload(newIndividualPayload());
     } catch (e: any) {
       setIndividualPreflightPassed(false);
@@ -695,6 +753,10 @@ function Dashboard() {
     const timer = window.setInterval(() => void loadScheduledEmails(), 5000);
     return () => window.clearInterval(timer);
   }, [individualEmailOpen]);
+
+  useEffect(() => {
+    if (!defaultIndividualProfileId && profiles[0]) setDefaultIndividualProfileId(profiles[0].id);
+  }, [profiles, defaultIndividualProfileId]);
 
   const setupSSE = (campaignId: string) => {
     if (eventSourceRef.current) {
@@ -1371,6 +1433,7 @@ function Dashboard() {
                   className={`profile-list-item ${editingIndividualId === null ? 'active' : ''}`}
                   onClick={() => {
                     setEditingIndividualId(null);
+                    setIndividualImportedFileName(null);
                     setIndividualPayload(newIndividualPayload());
                   }}
                 >
@@ -1396,9 +1459,33 @@ function Dashboard() {
                   <div className="individual-section-heading">
                     <div>
                       <h3>{editingIndividualId ? 'Email JSON' : 'New email JSON'}</h3>
-                      <p>Dates must be ISO 8601 with a timezone offset. Arrays create independent jobs.</p>
+                      <p>Offset-free dates use your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). Arrays create independent jobs.</p>
                     </div>
                   </div>
+                  <div className="individual-import-toolbar">
+                    <button type="button" className="secondary" onClick={() => individualFileInputRef.current?.click()} disabled={individualBusy}>
+                      ↑ Import JSON file
+                    </button>
+                    <input ref={individualFileInputRef} type="file" accept=".json,application/json" hidden onChange={(event) => void importIndividualJsonFile(event)} />
+                    <div className="individual-default-profile">
+                      <label htmlFor="individual-default-profile">Default sender profile</label>
+                      <select
+                        id="individual-default-profile"
+                        value={defaultIndividualProfileId}
+                        onChange={(event) => {
+                          setDefaultIndividualProfileId(event.target.value);
+                          setIndividualPreflightPassed(false);
+                          setIndividualPreviews([]);
+                        }}
+                        disabled={profiles.length === 0 || individualBusy}
+                      >
+                        {profiles.length === 0 && <option value="">No sender profiles available</option>}
+                        {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                      </select>
+                    </div>
+                    {individualImportedFileName && <span className="individual-imported-file">{individualImportedFileName}</span>}
+                  </div>
+                  <p className="individual-default-note">The selected profile is applied only to entries that omit <code>profile_id</code>.</p>
                   <textarea
                     className="code individual-json-editor"
                     value={individualJson}

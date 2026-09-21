@@ -713,6 +713,43 @@ footer {
   resize: vertical;
 }
 
+.individual-import-toolbar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.individual-default-profile {
+  display: flex;
+  min-width: 230px;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.individual-default-profile label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.individual-imported-file {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.individual-default-note {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
 .profile-reference {
   margin-top: 12px;
   color: var(--text-muted);

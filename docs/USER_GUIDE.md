@@ -212,25 +212,25 @@ For marketing and outreach campaigns:
 
 ## Scheduled Individual Emails
 
-Use **Individual emails** in the header for one-off messages that should not become campaign follow-ups. Enter one JSON object, or an array of independently scheduled objects:
+Use **Individual emails** in the header for one-off messages that should not become campaign follow-ups. Paste JSON or click **Import JSON file**. A file may contain one object or an array of independently scheduled objects:
 
 ```json
 {
   "email": "person@example.com",
   "subject": "Following up",
   "body": "Hi,\n\nI wanted to follow up on my earlier email.",
-  "scheduled_at": "2026-09-30T09:00:00+02:00",
-  "profile_id": "sender-profile-id",
+  "scheduled_at": "2026-09-30T09:00",
   "body_mode": "markdown"
 }
 ```
 
-1. Click **Live preview** to validate the payload and inspect the rendered HTML, plain text, headers, sender profile, and local send time.
-2. Click **Run preflight** to repeat validation, check suppression history and message size, and confirm SMTP connectivity.
-3. Click **Confirm schedule**. The app displays the confirmed local send time.
-4. Select a saved email to preview, edit/reschedule, or cancel it before sending begins.
+1. Choose a **Default sender profile**. It is applied only to entries without `profile_id`; an explicit profile in an entry is preserved.
+2. Click **Live preview** to validate the payload and inspect the rendered HTML, plain text, headers, sender profile, and local send time.
+3. Click **Run preflight** to repeat validation, check suppression history and message size, and confirm SMTP connectivity.
+4. Click **Confirm schedule**. The app displays the confirmed local send time.
+5. Select a saved email to preview, edit/reschedule, or cancel it before sending begins.
 
-`email`, `subject`, `body`, `scheduled_at`, and `profile_id` are required. `scheduled_at` must be a future ISO 8601 timestamp with a timezone offset. `body_mode` is optional and defaults to `markdown`. Every SMTP delivery attempt, including transient and permanent failures, counts toward the selected profile's rolling 24-hour cap. Connection or authentication failures before a message is submitted do not count. If the cap is full at send time, the worker moves the job to the next available slot.
+`email`, `subject`, `body`, and `scheduled_at` are required. `profile_id` may be omitted when a default profile is selected. An offset-free value such as `2026-09-30T09:00` is interpreted in the browser's local timezone; timestamps containing `Z` or an explicit offset retain that timezone. `body_mode` is optional and defaults to `markdown`. Every SMTP delivery attempt, including transient and permanent failures, counts toward the selected profile's rolling 24-hour cap. Connection or authentication failures before a message is submitted do not count. If the cap is full at send time, the worker moves the job to the next available slot.
 
 ---
 
