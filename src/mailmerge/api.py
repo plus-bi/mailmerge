@@ -1196,6 +1196,8 @@ def add_manual_suppression(data: ManualSuppressionIn, db: Session = Depends(get_
     ).all()
     for recipient in recipients:
         recipient.suppressed = True
+        if recipient.status in {"pending", "retry"}:
+            recipient.status = "suppressed"
         db.add(AuditLog(
             campaign_id=recipient.campaign_id,
             action="manual-suppressed",

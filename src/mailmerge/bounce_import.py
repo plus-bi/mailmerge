@@ -240,6 +240,8 @@ def apply_suppressions(db: Session, matches: Iterable[SuppressionMatch]) -> int:
             if recipient.suppressed:
                 continue
             recipient.suppressed = True
+            if recipient.status in {"pending", "retry"}:
+                recipient.status = "suppressed"
             matched_records += 1
             db.add(BounceEvent(
                 recipient_id=recipient.id,

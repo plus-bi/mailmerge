@@ -72,13 +72,23 @@ def sync_suppressions(db: Session, sync_url: str | None = None, sync_secret: str
             if "@" in recipient_id:
                 norm_email = recipient_id.strip().lower()
                 db.query(Recipient).filter(Recipient.normalized_email == norm_email).update({"suppressed": True})
+                db.query(Recipient).filter(
+                    Recipient.normalized_email == norm_email,
+                    Recipient.status.in_(["pending", "retry"]),
+                ).update({"status": "suppressed"})
             else:
                 recipient = db.get(Recipient, recipient_id)
                 if recipient:
                     recipient.suppressed = True
+                    if recipient.status in {"pending", "retry"}:
+                        recipient.status = "suppressed"
                     norm_email = recipient.normalized_email
                     if norm_email:
                         db.query(Recipient).filter(Recipient.normalized_email == norm_email).update({"suppressed": True})
+                        db.query(Recipient).filter(
+                            Recipient.normalized_email == norm_email,
+                            Recipient.status.in_(["pending", "retry"]),
+                        ).update({"status": "suppressed"})
         source_event_id = event.get("id")
         created_at = event.get("created_at")
         if source_event_id is not None and norm_email and created_at is not None:
