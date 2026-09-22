@@ -231,7 +231,10 @@ def process_campaign(campaign_id: str) -> None:
                 attempts = db.scalar(
                     select(DeliveryAttempt).where(DeliveryAttempt.recipient_id == recipient.id).order_by(DeliveryAttempt.id.desc())
                 )
-                if attempts and attempts.retry_at and attempts.retry_at > datetime.now(timezone.utc):
+                retry_at = attempts.retry_at if attempts else None
+                if retry_at and retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                if retry_at and retry_at > datetime.now(timezone.utc):
                     continue
                 try:
                     values = dict(recipient.values)

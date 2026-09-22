@@ -115,6 +115,37 @@ def test_worker_completes_when_all_sendable_recipients_are_sent(test_db_session,
     assert test_db_session.get(Recipient, excluded.id).status == "pending"
 
 
+def test_worker_handles_naive_sqlite_retry_timestamp(test_db_session, monkeypatch):
+    campaign = _scheduled_campaign(test_db_session, name="Naive retry")
+    recipient = Recipient(
+        campaign_id=campaign.id,
+        email="retry@example.com",
+        normalized_email="retry@example.com",
+        values={"name": "Retry"},
+        status="retry",
+    )
+    test_db_session.add(recipient)
+    test_db_session.flush()
+    test_db_session.add(DeliveryAttempt(
+        recipient_id=recipient.id,
+        outcome="transient",
+        retry_at=datetime.now() + timedelta(minutes=5),
+    ))
+    test_db_session.commit()
+    _worker_session(test_db_session, monkeypatch)
+    client = MagicMock()
+    monkeypatch.setattr(worker, "connect", lambda *args, **kwargs: client)
+    monkeypatch.setattr(worker, "get_secret", lambda *args: None)
+    send = MagicMock()
+    monkeypatch.setattr(worker, "send", send)
+
+    worker.process_campaign(campaign.id)
+
+    send.assert_not_called()
+    test_db_session.expire_all()
+    assert test_db_session.get(Campaign, campaign.id).state == CampaignState.sending
+
+
 def test_profile_daily_cap_uses_a_rolling_24_hour_window(test_db_session):
     profile = Profile(name="Rolling cap", smtp_host="localhost", smtp_port=1025, security="none", daily_cap=2)
     test_db_session.add(profile)
