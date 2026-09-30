@@ -215,6 +215,18 @@ type ScheduledEmailPreview = {
   size_bytes: number;
 };
 
+type InboxMessage = {
+  uid: string;
+  profile_id: string;
+  message_id: string;
+  from_address: string;
+  to_addresses: string[];
+  subject: string;
+  received_at: string | null;
+  text_body: string;
+  content_type: string;
+};
+
 const localDateTimeValue = (date: Date) => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
@@ -337,6 +349,11 @@ function Dashboard() {
   const [defaultIndividualProfileId, setDefaultIndividualProfileId] = useState('');
   const [individualImportedFileName, setIndividualImportedFileName] = useState<string | null>(null);
   const individualFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxProfileId, setInboxProfileId] = useState('');
+  const [inboxMessages, setInboxMessages] = useState<InboxMessage[]>([]);
+  const [selectedInboxUid, setSelectedInboxUid] = useState<string | null>(null);
+  const [inboxBusy, setInboxBusy] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -407,6 +424,31 @@ function Dashboard() {
     } catch (e: any) {
       notify(e.message, true);
     }
+  };
+
+  const loadInbox = async (profileId: string) => {
+    if (!profileId) return;
+    setInboxBusy(true);
+    try {
+      const data: { messages: InboxMessage[] } = await api(`/profiles/${profileId}/inbox?limit=100`);
+      setInboxMessages(data.messages);
+      setSelectedInboxUid(data.messages[0]?.uid ?? null);
+    } catch (e: any) {
+      setInboxMessages([]);
+      setSelectedInboxUid(null);
+      notify(e.message, true);
+    } finally {
+      setInboxBusy(false);
+    }
+  };
+
+  const openInbox = () => {
+    const profileId = profiles.find((profile) => profile.imap_host)?.id || profiles[0]?.id || '';
+    setInboxProfileId(profileId);
+    setInboxMessages([]);
+    setSelectedInboxUid(null);
+    setInboxOpen(true);
+    if (profileId) void loadInbox(profileId);
   };
 
   const newIndividualPayload = () => {
@@ -1184,6 +1226,7 @@ function Dashboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <button onClick={handleCreateCampaign}>+ New Campaign</button>
           <button className="secondary" onClick={openIndividualEmails}>Individual emails</button>
+          <button className="secondary" onClick={openInbox}>Inbox</button>
           <button className="secondary" onClick={openNewProfile}>Profiles</button>
           <UserButton />
         </div>
@@ -1204,7 +1247,7 @@ function Dashboard() {
             <div className="profile-modal-header">
               <div>
                 <h2 id="profile-manager-title">Sender profiles</h2>
-                <p>Manage SMTP accounts and their sending guardrails.</p>
+                <p>Manage SMTP sending, read-only IMAP inbox access, and sending guardrails.</p>
               </div>
               <button className="icon-button secondary" aria-label="Close profile manager" onClick={() => setProfileManagerOpen(false)}>✕</button>
             </div>
@@ -1340,6 +1383,10 @@ function Dashboard() {
                 <details className="advanced-profile-settings">
                   <summary>Advanced settings</summary>
                   <div className="form-grid compact">
+                    <div className="form-group full">
+                      <strong>Read-only inbox</strong>
+                      <small>IMAP reuses the stored SMTP credential and never marks messages as read.</small>
+                    </div>
                     <div className="form-group">
                       <label htmlFor="profile-imap-host">IMAP host</label>
                       <input id="profile-imap-host" value={profileForm.imap_host || ''} onChange={(e) => setProfileForm({ ...profileForm, imap_host: e.target.value })} placeholder="imap.example.com" />
@@ -1557,6 +1604,80 @@ function Dashboard() {
                   ) : <div className="individual-preview-empty">No preview yet.</div>}
                 </section>
               </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {inboxOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setInboxOpen(false)}>
+          <section
+            className="profile-modal inbox-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="inbox-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="profile-modal-header">
+              <div>
+                <h2 id="inbox-title">Sender inbox</h2>
+                <p>Read-only IMAP view. Messages remain unread on the mail server.</p>
+              </div>
+              <button className="icon-button secondary" aria-label="Close inbox" onClick={() => setInboxOpen(false)}>✕</button>
+            </div>
+            <div className="inbox-toolbar">
+              <label htmlFor="inbox-profile">Sender profile</label>
+              <select
+                id="inbox-profile"
+                value={inboxProfileId}
+                onChange={(event) => {
+                  const profileId = event.target.value;
+                  setInboxProfileId(profileId);
+                  void loadInbox(profileId);
+                }}
+              >
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>{profile.name}</option>
+                ))}
+              </select>
+              <button className="secondary" onClick={() => void loadInbox(inboxProfileId)} disabled={!inboxProfileId || inboxBusy}>
+                {inboxBusy ? 'Loading…' : '↻ Refresh'}
+              </button>
+            </div>
+            {!profiles.find((profile) => profile.id === inboxProfileId)?.imap_host && (
+              <div className="profile-modal-notice error">Configure IMAP host, port, and security for this profile first.</div>
+            )}
+            <div className="inbox-layout">
+              <nav className="profile-list inbox-list" aria-label="Inbox messages">
+                {inboxMessages.map((message) => (
+                  <button
+                    key={message.uid}
+                    className={`profile-list-item ${selectedInboxUid === message.uid ? 'active' : ''}`}
+                    onClick={() => setSelectedInboxUid(message.uid)}
+                  >
+                    <strong>{message.subject}</strong>
+                    <span>{message.from_address || 'Unknown sender'}</span>
+                    <span>{message.received_at ? new Date(message.received_at).toLocaleString() : 'Unknown date'}</span>
+                  </button>
+                ))}
+                {!inboxBusy && inboxMessages.length === 0 && <p className="empty-list-note">No messages loaded.</p>}
+              </nav>
+              <section className="inbox-message">
+                {(() => {
+                  const message = inboxMessages.find((item) => item.uid === selectedInboxUid);
+                  return message ? (
+                    <>
+                      <h3>{message.subject}</h3>
+                      <dl className="individual-preview-meta">
+                        <div><dt>From</dt><dd>{message.from_address || 'Unknown'}</dd></div>
+                        <div><dt>To</dt><dd>{message.to_addresses.join(', ') || 'Unknown'}</dd></div>
+                        <div><dt>Received</dt><dd>{message.received_at ? new Date(message.received_at).toLocaleString() : 'Unknown'}</dd></div>
+                      </dl>
+                      <pre className="inbox-text">{message.text_body || '(No plain-text body)'}</pre>
+                    </>
+                  ) : <div className="individual-preview-empty">Select a message to read it.</div>;
+                })()}
+              </section>
             </div>
           </section>
         </div>

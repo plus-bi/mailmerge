@@ -21,7 +21,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal, init_db
-from .models import AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Recipient, UnsubscribeEvent
+from .models import AuditLog, BounceEvent, Campaign, CampaignState, DeliveryAttempt, ManualSuppressionEvent, Profile, Recipient, UnsubscribeEvent
 
 BOUNCE_SUBJECT = "Undelivered Mail Returned to Sender"
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
@@ -133,6 +133,71 @@ def find_new_bounces(db: Session, messages: Iterable[dict[str, Any]]) -> list[Su
                 matches.append(SuppressionMatch(
                     source="Resend bounce", marker=marker, reason=bounce_reason(message),
                     occurred_at=_bounce_received_at(message), recipients=recipients
+                ))
+    return matches
+
+
+def _is_delivery_failure(message: dict[str, Any]) -> bool:
+    subject = str(message.get("subject") or "").casefold()
+    content_type = str(message.get("content_type") or "").casefold()
+    return (
+        "delivery status notification" in subject
+        or "delivery failure" in subject
+        or "mail delivery failed" in subject
+        or "failure notice" in subject
+        or "returned mail" in subject
+        or "undelivered mail" in subject
+        or "unzustellbar" in subject
+        or "zustellung fehlgeschlagen" in subject
+        or content_type == "multipart/report"
+    )
+
+
+def find_new_imap_bounces(
+    db: Session,
+    profile: Profile,
+    messages: Iterable[dict[str, Any]],
+) -> list[SuppressionMatch]:
+    """Find known Mailmerge recipients in delivery failures from an IMAP inbox."""
+    matches: list[SuppressionMatch] = []
+    seen_addresses: set[str] = set()
+    own_addresses = {
+        value.casefold() for value in (profile.from_address, profile.username) if value and "@" in value
+    }
+    for message in messages:
+        if not _is_delivery_failure(message):
+            continue
+        source_id = str(message.get("uid") or message.get("message_id") or "")
+        if not source_id:
+            continue
+        for address in extract_addresses(message) - own_addresses:
+            if address in seen_addresses:
+                continue
+            seen_addresses.add(address)
+            digest = hashlib.sha256(address.encode()).hexdigest()[:16]
+            marker = f"imap:{profile.id}:{source_id}:{digest}"
+            if _known_marker(db, marker):
+                continue
+            recipients = db.scalars(
+                select(Recipient)
+                .join(Campaign, Recipient.campaign_id == Campaign.id)
+                .where(
+                    Recipient.normalized_email == address,
+                    ~Recipient.suppressed,
+                    Campaign.state != CampaignState.sending,
+                )
+            ).all()
+            if recipients:
+                received_at = message.get("received_at")
+                matches.append(SuppressionMatch(
+                    source="IMAP bounce",
+                    marker=marker,
+                    reason=_short_reason(
+                        f"IMAP bounce: {message.get('subject') or 'delivery failure'}",
+                        "IMAP bounce",
+                    ),
+                    occurred_at=received_at if isinstance(received_at, datetime) else datetime.now(timezone.utc),
+                    recipients=recipients,
                 ))
     return matches
 

@@ -66,6 +66,9 @@ Creates a new sender profile.
 ### `PUT /profiles/{profile_id}`
 Updates an existing sender profile. Supplying a blank credential preserves the credential already stored in the OS keychain.
 
+### `GET /profiles/{profile_id}/inbox?limit=100`
+Reads the newest messages from the profile's IMAP inbox without changing their read/unread state. The response includes sender, recipients, subject, received time, content type, and a size-limited plain-text body. Raw headers, HTML, attachments, and stored credentials are not returned. The profile must have `imap_host`, `imap_port`, and `imap_security` configured; its existing password or OAuth credential is reused.
+
 ### `GET /profile-config`
 Returns the active TOML profile file for download. Credentials are never included in generated TOML.
 
@@ -261,6 +264,9 @@ Lists unsubscribe events already synchronized into the Mailmerge database, newes
 ### `POST /suppressions/sync`
 Manually fetches new unsubscribe events from the configured unsubscribe service, stores their metadata, and marks matching recipients as suppressed across campaigns.
 
+### `POST /suppressions/review`
+Collects review candidates from inherited suppressions, SMTP failures, configured IMAP inboxes, and the optional Resend inbound monitor. IMAP delivery failures are matched only to known Mailmerge recipients and are not suppressed automatically.
+
 #### Response `200 OK`:
 ```json
 {
@@ -294,6 +300,8 @@ Server-Sent Events (SSE) stream streaming real-time status and delivery counts (
 ---
 
 ## 9. Scheduled Individual Emails
+
+JSON Schema: [`scheduled-individual-emails.schema.json`](scheduled-individual-emails.schema.json). It accepts either one email object or an array and includes generation guidance for AI agents.
 
 ### `POST /scheduled-emails/preview`
 Validates and renders one JSON object or an array without saving it.

@@ -59,8 +59,9 @@ A privacy-focused, lightweight mail merge service for bulk email delivery. It al
 1. Click **"Profiles"** in the header to open the sender profile manager.
 2. Create a profile by entering the SMTP server, authentication, and sending-limit settings, then click **Save profile**. The credential is stored in the OS keychain; the remaining settings are saved to the configured TOML file or the app-managed `profiles.toml` in its data directory.
 3. Use **Load TOML** to import and activate an existing `[[profiles]]` file. Use **Download TOML** to save a credential-free backup.
-4. Select an existing campaign or click **"+ New Campaign"**.
-5. Under the **📝 Setup & Template** tab:
+4. To read replies and delivery failures, configure the profile's **IMAP host**, **IMAP port**, and **IMAP security**. Mailmerge reuses the stored profile credential; it does not store a second inbox password.
+5. Select an existing campaign or click **"+ New Campaign"**.
+6. Under the **📝 Setup & Template** tab:
    - **Campaign Name**: e.g. `Q3 Community Update`.
    - **Sender Profile**: Select your configured SMTP profile (e.g. `LRZ`, `Postmark`, `Gmail/Workspace`).
    - **From Name**: Populated from the selected sender profile; the display name visible in the recipient's email client (e.g., `Alice from Acme`).
@@ -210,9 +211,17 @@ For marketing and outreach campaigns:
    - Open the **Unsubscribed** tab and click **Sync Unsubscribe List**.
    - Mailmerge lists the email, campaign, and unsubscribe time, shows the most recent sync time beneath the button, and marks matching recipients as `suppressed = True`.
 
+## Sender Inbox and Bounce Review
+
+Click **Inbox** in the header to read recent messages for a sender profile. The inbox connection is read-only and uses IMAP `BODY.PEEK[]`, so opening messages in Mailmerge does not mark them as read. Only plain text is displayed; remote HTML and attachments are not rendered.
+
+For the TUM/LRZ profile, configure `xmail.mwn.de`, port `993`, and `tls`. **Sync & review** in the suppression tab checks configured inboxes for delivery-failure messages, extracts addresses that match known Mailmerge recipients, and presents them as `IMAP bounce` candidates. Select and apply candidates manually; inbox messages never suppress an address automatically.
+
 ## Scheduled Individual Emails
 
 Use **Individual emails** in the header for one-off messages that should not become campaign follow-ups. Paste JSON or click **Import JSON file**. A file may contain one object or an array of independently scheduled objects:
+
+For AI-assisted generation from external data, provide the agent with [`scheduled-individual-emails.schema.json`](scheduled-individual-emails.schema.json). Its descriptions and `x-ai-instructions` document mapping, escaping, profile, timezone, and content rules.
 
 ```json
 {

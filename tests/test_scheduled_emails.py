@@ -97,6 +97,22 @@ def test_scheduled_email_rejects_suppressed_address(test_db_session):
     assert "suppression list" in raised.value.detail
 
 
+def test_preview_allows_past_schedule_but_preflight_rejects_it(test_db_session):
+    profile = _profile(test_db_session)
+    payload = _payload(profile)
+    payload["scheduled_at"] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    input_data = ScheduledEmailIn(**payload)
+
+    preview = preview_scheduled_emails(input_data, test_db_session)
+
+    assert preview["ok"] is True
+    assert preview["previews"][0]["subject"] == "Checking in"
+    with pytest.raises(HTTPException) as raised:
+        preflight_scheduled_emails(input_data, test_db_session)
+    assert raised.value.status_code == 422
+    assert raised.value.detail == "scheduled_at must be in the future"
+
+
 def test_worker_sends_due_individual_email(test_db_session, monkeypatch):
     profile = _profile(test_db_session)
     email = ScheduledEmail(

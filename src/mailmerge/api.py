@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from jinja2 import TemplateError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -30,7 +30,15 @@ from .rendering import get_required_variables, render_message, templates_for_uns
 from .secrets import get_secret, set_secret
 from .smtp import AuthenticationFailure, connect, send
 from .suppression import sync_suppressions
-from .bounce_import import SuppressionMatch, apply_suppressions, find_inherited_suppressions, find_new_resend_bounces, find_new_smtp_failures
+from .bounce_import import (
+    SuppressionMatch,
+    apply_suppressions,
+    find_inherited_suppressions,
+    find_new_imap_bounces,
+    find_new_resend_bounces,
+    find_new_smtp_failures,
+)
+from .imap_inbox import read_inbox
 
 router = APIRouter(prefix="/api/v1")
 
@@ -335,6 +343,31 @@ def profiles(db: Session = Depends(get_db)):
     return db.scalars(select(Profile).order_by(Profile.name)).all()
 
 
+@router.get("/profiles/{profile_id}/inbox")
+def profile_inbox(
+    profile_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    profile = db.get(Profile, profile_id)
+    if not profile:
+        raise HTTPException(404, "sender profile not found")
+    try:
+        messages = read_inbox(
+            profile,
+            password=get_secret(profile.id, "password"),
+            access_token=get_secret(profile.id, "access_token"),
+            limit=limit,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    public_messages = [
+        {key: value for key, value in message.items() if key not in {"headers_json", "message_json"}}
+        for message in messages
+    ]
+    return {"profile_id": profile.id, "profile": profile.name, "messages": public_messages}
+
+
 @router.post("/profiles/test-connection")
 def test_profile_connection(data: ProfileConnectionTestIn, db: Session = Depends(get_db)):
     values = data.model_dump(exclude={"password", "access_token", "profile_id"})
@@ -476,7 +509,12 @@ def reload_profile_config(db: Session = Depends(get_db)):
         raise HTTPException(422, str(exc)) from exc
 
 
-def _validate_scheduled_email(data: ScheduledEmailIn, db: Session) -> tuple[Profile, datetime]:
+def _validate_scheduled_email(
+    data: ScheduledEmailIn,
+    db: Session,
+    *,
+    require_future: bool = True,
+) -> tuple[Profile, datetime]:
     profile = db.get(Profile, data.profile_id)
     if not profile:
         raise HTTPException(422, f"sender profile {data.profile_id!r} was not found")
@@ -485,7 +523,7 @@ def _validate_scheduled_email(data: ScheduledEmailIn, db: Session) -> tuple[Prof
     if data.scheduled_at.tzinfo is None:
         raise HTTPException(422, "scheduled_at must include a timezone offset")
     scheduled_at = data.scheduled_at.astimezone(timezone.utc)
-    if scheduled_at <= datetime.now(timezone.utc):
+    if require_future and scheduled_at <= datetime.now(timezone.utc):
         raise HTTPException(422, "scheduled_at must be in the future")
     normalized = data.email.casefold()
     suppression_markers = (
@@ -498,8 +536,13 @@ def _validate_scheduled_email(data: ScheduledEmailIn, db: Session) -> tuple[Prof
     return profile, scheduled_at
 
 
-def _scheduled_email_preview(data: ScheduledEmailIn, db: Session) -> tuple[dict[str, Any], Profile]:
-    profile, scheduled_at = _validate_scheduled_email(data, db)
+def _scheduled_email_preview(
+    data: ScheduledEmailIn,
+    db: Session,
+    *,
+    require_future: bool = True,
+) -> tuple[dict[str, Any], Profile]:
+    profile, scheduled_at = _validate_scheduled_email(data, db, require_future=require_future)
     try:
         rendered = render_message(data.subject, data.body, data.body_mode, {})
         message = build_individual_message(profile, data.email, rendered)
@@ -521,11 +564,17 @@ def _scheduled_email_preview(data: ScheduledEmailIn, db: Session) -> tuple[dict[
     }, profile
 
 
-def _preflight_scheduled_email_payloads(payloads: list[ScheduledEmailIn], db: Session, *, test_smtp: bool) -> list[dict[str, Any]]:
+def _preflight_scheduled_email_payloads(
+    payloads: list[ScheduledEmailIn],
+    db: Session,
+    *,
+    test_smtp: bool,
+    require_future: bool = True,
+) -> list[dict[str, Any]]:
     previews: list[dict[str, Any]] = []
     profiles: dict[str, Profile] = {}
     for payload in payloads:
-        preview, profile = _scheduled_email_preview(payload, db)
+        preview, profile = _scheduled_email_preview(payload, db, require_future=require_future)
         previews.append(preview)
         profiles[profile.id] = profile
     if test_smtp:
@@ -556,7 +605,12 @@ def preview_scheduled_emails(data: ScheduledEmailIn | list[ScheduledEmailIn], db
     payloads = data if isinstance(data, list) else [data]
     if not payloads:
         raise HTTPException(422, "provide at least one scheduled email")
-    previews = _preflight_scheduled_email_payloads(payloads, db, test_smtp=False)
+    previews = _preflight_scheduled_email_payloads(
+        payloads,
+        db,
+        test_smtp=False,
+        require_future=False,
+    )
     return {"ok": True, "previews": previews, "message": f"Validated and rendered {len(previews)} email(s)."}
 
 
@@ -1151,6 +1205,17 @@ def _suppression_matches_for_review(db: Session) -> tuple[list[SuppressionMatch]
 
     matches = find_inherited_suppressions(db)
     matches.extend(find_new_smtp_failures(db))
+    for profile in db.scalars(select(Profile).where(Profile.imap_host.is_not(None))).all():
+        try:
+            messages = read_inbox(
+                profile,
+                password=get_secret(profile.id, "password"),
+                access_token=get_secret(profile.id, "access_token"),
+                limit=200,
+            )
+            matches.extend(find_new_imap_bounces(db, profile, messages))
+        except RuntimeError as exc:
+            warnings.append(str(exc))
     token = os.getenv("MAILMERGE_RESEND_MONITOR_API_TOKEN", "")
     if not token:
         warnings.append("Resend bounce review is unavailable until MAILMERGE_RESEND_MONITOR_API_TOKEN is configured.")

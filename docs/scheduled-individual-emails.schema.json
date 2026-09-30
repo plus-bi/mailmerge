@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mailmerge.plus.bi/schemas/scheduled-individual-emails.schema.json",
+  "title": "Mailmerge scheduled individual email import",
+  "description": "A single standalone email or a list of independently scheduled emails for the Mailmerge Individual emails importer.",
+  "$comment": "Generate strict JSON, not JSONLines or Markdown. The root may be one email object or an array of email objects. Literal line breaks are invalid inside JSON strings; encode body line breaks as \\n or use HTML with body_mode set to html.",
+  "x-ai-instructions": [
+    "Create one entry for each external recipient and intended follow-up time.",
+    "Copy email addresses from authoritative external data; do not invent or guess an address.",
+    "Write a complete, recipient-ready subject and body. Do not leave template placeholders such as {{ name }}.",
+    "scheduled_at must be in the future. When no timezone is supplied, use YYYY-MM-DDTHH:MM and Mailmerge will interpret it in the operator browser's local timezone.",
+    "Omit profile_id when the operator should apply one profile from the Default sender profile dropdown. Preserve profile_id when the external workflow provides a known Mailmerge profile UUID.",
+    "Use body_mode markdown for plain text or Markdown. Use body_mode html only when body contains intentional HTML markup.",
+    "Do not add source-system fields, notes, phone numbers, or other properties to the output."
+  ],
+  "oneOf": [
+    {
+      "$ref": "#/$defs/email"
+    },
+    {
+      "type": "array",
+      "title": "Scheduled email list",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/email"
+      }
+    }
+  ],
+  "$defs": {
+    "email": {
+      "type": "object",
+      "title": "Scheduled individual email",
+      "additionalProperties": false,
+      "required": [
+        "email",
+        "subject",
+        "body",
+        "scheduled_at"
+      ],
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "description": "Recipient email address copied from the external source."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Final rendered subject line for this recipient. It must not contain newline characters or unresolved template placeholders."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Final recipient-ready message body. In serialized JSON, paragraph breaks must be escaped as \\n. Do not include unresolved template placeholders."
+        },
+        "scheduled_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,6})?)?(?:Z|[+-]\\d{2}:?\\d{2})?$",
+          "description": "Future send date and time. Prefer YYYY-MM-DDTHH:MM without an offset when the operator's browser-local timezone should be used. Z or an explicit UTC offset may be supplied when the source time is timezone-aware.",
+          "examples": [
+            "2026-09-30T09:00",
+            "2026-09-30T09:00:00+02:00",
+            "2026-09-30T07:00:00Z"
+          ]
+        },
+        "profile_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional Mailmerge sender-profile UUID. Omit this property to let the operator apply the selected Default sender profile to this entry."
+        },
+        "body_mode": {
+          "type": "string",
+          "enum": [
+            "markdown",
+            "html"
+          ],
+          "default": "markdown",
+          "description": "Optional rendering mode. Omit it for Markdown; specify html only for an HTML body."
+        }
+      },
+      "examples": [
+        {
+          "email": "person@example.com",
+          "subject": "Oppfolging pa min tidligere e-post",
+          "body": "Hei,\n\nJeg folger opp e-posten jeg sendte tidligere.\n\nVennlig hilsen\nHaris",
+          "scheduled_at": "2026-09-30T09:00",
+          "body_mode": "markdown"
+        }
+      ]
+    }
+  }
+}
