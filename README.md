@@ -14,6 +14,7 @@ A privacy-first, lightweight bulk email delivery engine designed for sending per
 - 🗓️ **Scheduled Individual Emails**: Import one JSON object or an array, apply a default sender profile, use local send times, preview and preflight messages, and edit or cancel them before sending.
 - 🛡️ **Unsubscribe Suppression Management**: Review RFC 8058 one-click and signed unsubscribe requests, then manually synchronize them into the suppression database from the dashboard.
 - 📬 **Bounce Suppression Import**: Import DSN bounces from the independent Resend inbound monitor with `mailmerge-import-bounces`.
+- 🔒 **Zero Tracking & Secure Credentials**: No tracking pixels, open beacons, or URL rewrites. Passwords and tokens are stored in the OS Secret Service / Keyring.
 
 To import standard `Undelivered Mail Returned to Sender` notifications and
 final SMTP delivery failures, set the monitor token only in the process
@@ -31,7 +32,42 @@ across existing campaigns only after it lists new addresses by source and
 receives an interactive `yes` confirmation. Use `--dry-run` to list without
 prompting. It deliberately does not change recipients in a campaign that is
 currently sending. It never prints the monitor token or message contents.
-- 🔒 **Zero Tracking & Secure Credentials**: No tracking pixels, open beacons, or URL rewrites. Passwords and tokens are stored in the OS Secret Service / Keyring.
+
+### Export matching Gmail messages
+
+The Gmail exporter saves matching messages as original `.eml` files and writes
+a `manifest.json` in `./gmail-export`. It searches with Gmail's `to:` operator,
+so messages addressed to a different alias and merely routed into the mailbox
+are excluded. When rerun, it removes stale `.eml` files listed by its previous
+manifest that no longer match the current search. Daily runs reuse files already
+in the manifest and download only new or missing matches. Pass `--refresh` to
+download every match again.
+
+Install its optional dependencies, authenticate Application Default Credentials
+as a Google identity with Secret Manager access, and store the service-account
+key once:
+
+```bash
+pip install -e '.[gmail-export]'
+gcloud auth application-default login
+python scripts/export_gmail_messages.py \
+  --store-key-from ~/Downloads/workspace-admin-509116-0edaac22b3ce.json
+```
+
+Then run the exporter without the JSON file:
+
+```bash
+python scripts/export_gmail_messages.py
+```
+
+The defaults use project `plusbi`, secret
+`gmail-export-service-account-key`, delegated mailbox `haris@plus.bi`, and the
+subject phrase `kundene deres mer enn bare tall`. Use `--secret-project`,
+`--secret-id`, `--mailbox`, `--recipient`, `--subject-phrase`, and
+`--output-dir` to change those values. The identity used by the normal export
+needs `roles/secretmanager.secretAccessor` on the secret. The one-time upload
+identity needs permission to create the secret and add a version; alternatively,
+pass `--bootstrap-credentials` if the service account itself has that access.
 
 ---
 
